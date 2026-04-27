@@ -1,15 +1,45 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, Linking, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, ScreenPadding, Shadows } from "@/constants/theme";
 
 const MOCK_PHARMACIES = [
-  { id: "1", name: "Merkez Eczanesi", address: "Kadıköy, İstanbul", hours: "08:00–22:00" },
-  { id: "2", name: "Sağlık Eczanesi", address: "Beşiktaş, İstanbul", hours: "09:00–21:00" },
-  { id: "3", name: "Yeşil Haç Eczanesi", address: "Çankaya, Ankara", hours: "08:30–20:00" },
+  {
+    id: "1",
+    name: "Merkez Eczanesi",
+    address: "Kadıköy, İstanbul",
+    hours: "08:00–22:00",
+    lat: 40.9918,
+    lng: 29.0281,
+  },
+  {
+    id: "2",
+    name: "Sağlık Eczanesi",
+    address: "Beşiktaş, İstanbul",
+    hours: "09:00–21:00",
+    lat: 41.0439,
+    lng: 29.0053,
+  },
+  {
+    id: "3",
+    name: "Yeşil Haç Eczanesi",
+    address: "Çankaya, Ankara",
+    hours: "08:30–20:00",
+    lat: 39.9179,
+    lng: 32.8627,
+  },
 ];
 
 export default function PharmacyScreen() {
+  const openUrl = async (url: string) => {
+    const canOpen = await Linking.canOpenURL(url);
+    if (!canOpen) {
+      Alert.alert("Bağlantı açılamadı", "Harita bağlantısı şu anda açılamıyor.");
+      return;
+    }
+    await Linking.openURL(url);
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView
@@ -21,9 +51,13 @@ export default function PharmacyScreen() {
           Yakınınızdaki eczaneleri harita ve liste ile yakında burada görebileceksiniz.
         </Text>
 
-        <Pressable style={[styles.mapPlaceholder, Shadows.card]}>
-          <Ionicons name="map-outline" size={40} color={Colors.primary} />
-          <Text style={styles.mapText}>Harita görünümü (yakında)</Text>
+        <Pressable
+          style={[styles.nearbyBtn, Shadows.card]}
+          onPress={() =>
+            void openUrl("https://www.google.com/maps/search/eczane/@41.0082,28.9784,14z")
+          }
+        >
+          <Text style={styles.nearbyBtnText}>📍 Yakınımdaki Eczaneleri Bul</Text>
         </Pressable>
 
         <Text style={styles.sectionTitle}>Örnek liste</Text>
@@ -36,6 +70,16 @@ export default function PharmacyScreen() {
               <Text style={styles.cardName}>{p.name}</Text>
               <Text style={styles.cardMeta}>{p.address}</Text>
               <Text style={styles.cardHours}>{p.hours}</Text>
+              <Pressable
+                style={styles.routeBtn}
+                onPress={() =>
+                  void openUrl(
+                    `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=driving`
+                  )
+                }
+              >
+                <Text style={styles.routeBtnText}>Yol Tarifi Al</Text>
+              </Pressable>
             </View>
             <Ionicons name="navigate-outline" size={22} color={Colors.textSecondary} />
           </View>
@@ -66,21 +110,22 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 20,
   },
-  mapPlaceholder: {
-    height: 160,
-    backgroundColor: Colors.background,
+  nearbyBtn: {
+    backgroundColor: "#16A34A",
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: "#15803D",
     alignItems: "center",
     justifyContent: "center",
+    paddingVertical: 18,
+    paddingHorizontal: 14,
     marginBottom: 28,
-    gap: 8,
   },
-  mapText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    fontWeight: "500",
+  nearbyBtnText: {
+    fontSize: 17,
+    color: "#FFFFFF",
+    fontWeight: "700",
+    textAlign: "center",
   },
   sectionTitle: {
     fontSize: 17,
@@ -123,5 +168,18 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     marginTop: 4,
     fontWeight: "500",
+  },
+  routeBtn: {
+    alignSelf: "flex-start",
+    marginTop: 10,
+    backgroundColor: "#16A34A",
+    borderRadius: 9,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  routeBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

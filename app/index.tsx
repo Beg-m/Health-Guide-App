@@ -1,20 +1,5 @@
-import { ActivityIndicator, View, StyleSheet } from "react-native";
-import { Colors } from "@/constants/theme";
+import { Redirect, type Href } from "expo-router";
 
 export default function RootIndex() {
-  // Root flow is controlled from app/_layout.tsx.
-  return (
-    <View style={styles.loader}>
-      <ActivityIndicator size="large" color={Colors.primary} />
-    </View>
-  );
+  return <Redirect href={"/(tabs)" as Href} />;
 }
-
-const styles = StyleSheet.create({
-  loader: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.background,
-  },
-});

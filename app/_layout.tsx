@@ -33,6 +33,8 @@ export default function RootLayout() {
 
         if (cancelled) return;
 
+        const isRootPath = pathname === "/" || pathname === "/index";
+
         if (hasSeenOnboarding !== "true") {
           if (pathname !== "/onboarding") {
             router.replace("/onboarding");
@@ -41,8 +43,8 @@ export default function RootLayout() {
           if (pathname !== "/auth") {
             router.replace("/auth" as Href);
           }
-        } else if (pathname === "/" || pathname === "/onboarding" || pathname === "/auth") {
-          router.replace("/(tabs)");
+        } else if (isRootPath || pathname === "/onboarding" || pathname === "/auth") {
+          router.replace("/(tabs)" as Href);
         }
       } finally {
         if (!cancelled) setReady(true);
