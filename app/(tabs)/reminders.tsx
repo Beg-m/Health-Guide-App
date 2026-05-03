@@ -12,11 +12,12 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { Colors, ScreenPadding } from "@/constants/theme";
 
-const BENEFITS = [
-  "Sınırsız ilaç hatırlatması",
-  "Özelleştirilebilir bildirim saatleri",
-  "Kür takibi",
-  "Aile üyesi profilleri",
+const BENEFITS: { label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { label: "Sınırsız ilaç hatırlatması", icon: "checkmark-circle" },
+  { label: "Özelleştirilebilir bildirim saatleri", icon: "checkmark-circle" },
+  { label: "Kür takibi", icon: "checkmark-circle" },
+  { label: "Aile üyesi profilleri", icon: "checkmark-circle" },
+  { label: "Sağlıklı Tarifler Blogu", icon: "restaurant-outline" },
 ];
 
 export default function RemindersScreen() {
@@ -54,10 +55,10 @@ export default function RemindersScreen() {
         </View>
 
         <View style={styles.benefitsCard}>
-          {BENEFITS.map((line) => (
-            <View key={line} style={styles.benefitRow}>
-              <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />
-              <Text style={styles.benefitText}>{line}</Text>
+          {BENEFITS.map((item) => (
+            <View key={item.label} style={styles.benefitRow}>
+              <Ionicons name={item.icon} size={22} color={Colors.primary} />
+              <Text style={styles.benefitText}>{item.label}</Text>
             </View>
           ))}
         </View>

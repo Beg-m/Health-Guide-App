@@ -11,7 +11,18 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors, Shadows, ScreenPadding } from "@/constants/theme";
+import { LinearGradient } from "expo-linear-gradient";
+import {
+  Colors,
+  Gradients,
+  Radii,
+  Shadows,
+  ScreenPadding,
+  headerTitleStyle,
+  medicineAccentColor,
+} from "@/constants/theme";
+import { FadeInView } from "@/components/FadeInView";
+import { PressableScale } from "@/components/PressableScale";
 import {
   filterMedicinesBySearch,
   sortMedicinesByName,
@@ -103,9 +114,14 @@ export default function SearchScreen() {
 
   const renderSectionHeader = useCallback(
     ({ section }: { section: MedicineSection }) => (
-      <View style={styles.sectionHeader}>
+      <LinearGradient
+        colors={["#ecfdf5", "#d1fae5"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.sectionHeader}
+      >
         <Text style={styles.sectionHeaderText}>{section.title}</Text>
-      </View>
+      </LinearGradient>
     ),
     []
   );
@@ -113,9 +129,10 @@ export default function SearchScreen() {
   const renderItem = useCallback(
     ({ item: m }: { item: MedicineRecord }) => {
       const ingredient = m.activeIngredient.trim() ? m.activeIngredient : "—";
+      const accent = medicineAccentColor(m.id);
       return (
-        <Pressable
-          style={[styles.card, Shadows.card]}
+        <PressableScale
+          style={[styles.card, Shadows.cardMedium]}
           onPress={() => router.push(`/medicine/${m.id}`)}
         >
           <View style={styles.cardHeader}>
@@ -133,7 +150,8 @@ export default function SearchScreen() {
             <Text style={styles.cardKey}>Kullanım: </Text>
             {previewUsage(m, mode)}
           </Text>
-        </Pressable>
+          <View style={[styles.cardAccentBar, { backgroundColor: accent }]} />
+        </PressableScale>
       );
     },
     [mode, router]
@@ -150,6 +168,7 @@ export default function SearchScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
+      <FadeInView style={{ flex: 1 }}>
       <View style={styles.top}>
         <Text style={styles.title}>İlaç Ara</Text>
         <View style={styles.searchRow}>
@@ -173,25 +192,33 @@ export default function SearchScreen() {
         <View style={styles.modeRow}>
           <Text style={styles.modeLabel}>Görünüm:</Text>
           <View style={styles.toggle}>
-            <Pressable
-              style={[styles.toggleBtn, mode === "basic" && styles.toggleBtnActive]}
-              onPress={() => setMode("basic")}
-            >
-              <Text
-                style={[styles.toggleText, mode === "basic" && styles.toggleTextActive]}
-              >
-                Basic Mode
-              </Text>
+            <Pressable onPress={() => setMode("basic")} style={styles.toggleBtn}>
+              {mode === "basic" ? (
+                <LinearGradient
+                  colors={[...Gradients.button]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.toggleBtnGrad}
+                >
+                  <Text style={styles.toggleTextActive}>Basic Mode</Text>
+                </LinearGradient>
+              ) : (
+                <Text style={styles.toggleText}>Basic Mode</Text>
+              )}
             </Pressable>
-            <Pressable
-              style={[styles.toggleBtn, mode === "medical" && styles.toggleBtnActive]}
-              onPress={() => setMode("medical")}
-            >
-              <Text
-                style={[styles.toggleText, mode === "medical" && styles.toggleTextActive]}
-              >
-                Medical Mode
-              </Text>
+            <Pressable onPress={() => setMode("medical")} style={styles.toggleBtn}>
+              {mode === "medical" ? (
+                <LinearGradient
+                  colors={[...Gradients.button]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.toggleBtnGrad}
+                >
+                  <Text style={styles.toggleTextActive}>Medical Mode</Text>
+                </LinearGradient>
+              ) : (
+                <Text style={styles.toggleText}>Medical Mode</Text>
+              )}
             </Pressable>
           </View>
         </View>
@@ -235,6 +262,7 @@ export default function SearchScreen() {
           </View>
         )}
       </View>
+      </FadeInView>
     </SafeAreaView>
   );
 }
@@ -250,15 +278,16 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 24,
-    fontWeight: "700",
+    ...headerTitleStyle,
     color: Colors.text,
     marginBottom: 16,
+    letterSpacing: 0.45,
   },
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: Colors.card,
-    borderRadius: 16,
+    borderRadius: Radii.card,
     paddingHorizontal: ScreenPadding,
     paddingVertical: 12,
     gap: 10,
@@ -292,17 +321,23 @@ const styles = StyleSheet.create({
   },
   toggleBtn: {
     flex: 1,
-    paddingVertical: 10,
     alignItems: "center",
-    borderRadius: 10,
+    justifyContent: "center",
+    borderRadius: 12,
+    overflow: "hidden",
   },
-  toggleBtnActive: {
-    backgroundColor: Colors.primary,
+  toggleBtnGrad: {
+    width: "100%",
+    paddingVertical: 12,
+    alignItems: "center",
+    borderRadius: 12,
   },
   toggleText: {
     fontSize: 14,
     fontWeight: "600",
     color: Colors.textSecondary,
+    paddingVertical: 12,
+    textAlign: "center",
   },
   toggleTextActive: {
     color: "#FFFFFF",
@@ -329,30 +364,40 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   sectionHeader: {
-    backgroundColor: "#EEF8F3",
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: ScreenPadding,
     marginLeft: -ScreenPadding,
     marginRight: -32,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.primary,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(0,168,107,0.2)",
+    borderBottomColor: `${Colors.primary}33`,
+    borderLeftWidth: 5,
+    borderLeftColor: Colors.primary,
   },
   sectionHeaderText: {
     fontSize: 16,
     fontWeight: "800",
     color: Colors.primaryDark,
     textAlign: "left",
-    letterSpacing: 0.5,
+    letterSpacing: 0.55,
   },
   card: {
     backgroundColor: Colors.background,
-    borderRadius: 16,
+    borderRadius: Radii.card,
     padding: ScreenPadding,
-    marginBottom: 12,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: Colors.border,
+    overflow: "hidden",
+    position: "relative",
+  },
+  cardAccentBar: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 5,
+    borderTopLeftRadius: Radii.card,
+    borderBottomLeftRadius: Radii.card,
   },
   ingredientPill: {
     alignSelf: "flex-start",

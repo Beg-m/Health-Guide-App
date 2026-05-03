@@ -1,53 +1,61 @@
-import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, usePathname, useRouter, type Href } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { Colors } from "@/constants/theme";
 
-const KEY_HAS_SEEN_ONBOARDING = "hasSeenOnboarding";
+/** Must match onboarding.tsx — only the literal "true" skips onboarding */
+const KEY_ONBOARDING_COMPLETED = "onboardingCompleted";
 const KEY_IS_LOGGED_IN = "isLoggedIn";
-const KEY_TEST_RESET_DONE = "@health_guide_test_reset_done";
 
 export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
-  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
       try {
-        // Testing helper: clear storage only on the first app load.
-        const resetDone = await AsyncStorage.getItem(KEY_TEST_RESET_DONE);
-        if (!resetDone) {
-          await AsyncStorage.clear();
-          await AsyncStorage.setItem(KEY_TEST_RESET_DONE, "true");
-        }
+        const onboardingCompleted = await AsyncStorage.getItem(
+          KEY_ONBOARDING_COMPLETED
+        );
 
-        const [hasSeenOnboarding, isLoggedIn] = await Promise.all([
-          AsyncStorage.getItem(KEY_HAS_SEEN_ONBOARDING),
-          AsyncStorage.getItem(KEY_IS_LOGGED_IN),
-        ]);
+        if (__DEV__) {
+          console.log("[RootLayout] onboardingCompleted:", onboardingCompleted);
+        }
 
         if (cancelled) return;
 
-        const isRootPath = pathname === "/" || pathname === "/index";
+        const onboardingDone = onboardingCompleted === "true";
 
-        if (hasSeenOnboarding !== "true") {
+        const onEntryPath =
+          pathname === "/" ||
+          pathname === "/index" ||
+          pathname === "/onboarding" ||
+          pathname === "/auth";
+
+        if (!onboardingDone) {
           if (pathname !== "/onboarding") {
             router.replace("/onboarding");
           }
-        } else if (isLoggedIn !== "true") {
+          return;
+        }
+
+        const isLoggedIn = await AsyncStorage.getItem(KEY_IS_LOGGED_IN);
+        if (cancelled) return;
+
+        if (isLoggedIn !== "true") {
           if (pathname !== "/auth") {
             router.replace("/auth" as Href);
           }
-        } else if (isRootPath || pathname === "/onboarding" || pathname === "/auth") {
+          return;
+        }
+
+        if (onEntryPath) {
           router.replace("/(tabs)" as Href);
         }
-      } finally {
-        if (!cancelled) setReady(true);
+      } catch {
+        /* ignore */
       }
     };
 
@@ -57,20 +65,13 @@ export default function RootLayout() {
     };
   }, [pathname, router]);
 
-  if (!ready) {
-    return (
-      <View style={styles.loader}>
-        <StatusBar style="dark" />
-        <ActivityIndicator size="large" color={Colors.primary} />
-      </View>
-    );
-  }
-
   return (
     <>
       <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
+      <Stack
+        initialRouteName="onboarding"
+        screenOptions={{ headerShown: false }}
+      >
         <Stack.Screen
           name="onboarding"
           options={{
@@ -78,6 +79,7 @@ export default function RootLayout() {
             animation: "fade_from_bottom",
           }}
         />
+        <Stack.Screen name="index" />
         <Stack.Screen
           name="auth"
           options={{
@@ -121,16 +123,21 @@ export default function RootLayout() {
             animation: "slide_from_right",
           }}
         />
+        <Stack.Screen
+          name="recipe"
+          options={{
+            presentation: "card",
+            animation: "slide_from_right",
+          }}
+        />
+        <Stack.Screen
+          name="blog-post"
+          options={{
+            presentation: "card",
+            animation: "slide_from_right",
+          }}
+        />
       </Stack>
     </>
   );
 }
-
-const styles = StyleSheet.create({
-  loader: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.background,
-  },
-});

@@ -1,35 +1,67 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors, Shadows, ScreenPadding } from "@/constants/theme";
+import { Colors, Shadows } from "@/constants/theme";
+import { AnimatedTabBarButton } from "@/components/AnimatedTabBarButton";
+
+const TAB_ICON_ACTIVE = "#16a34a";
+const TAB_ICON_INACTIVE = "#9ca3af";
+const TAB_ICON_SIZE = 24;
+
+type IonName = React.ComponentProps<typeof Ionicons>["name"];
+
+function TabBarIonicons({
+  name,
+  focused,
+}: {
+  name: IonName;
+  focused: boolean;
+}) {
+  return (
+    <Ionicons
+      name={name}
+      size={TAB_ICON_SIZE}
+      color={focused ? TAB_ICON_ACTIVE : TAB_ICON_INACTIVE}
+    />
+  );
+}
 
 export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textSecondary,
+        lazy: false,
+        tabBarButton: (props) => <AnimatedTabBarButton {...props} />,
+        tabBarActiveTintColor: TAB_ICON_ACTIVE,
+        tabBarInactiveTintColor: TAB_ICON_INACTIVE,
         tabBarStyle: {
           backgroundColor: Colors.background,
           borderTopWidth: 0,
+          height: 60,
+          paddingBottom: 8,
           paddingTop: 6,
-          paddingBottom: 6,
-          height: 62,
-          paddingHorizontal: ScreenPadding,
+          paddingHorizontal: 4,
           ...Shadows.tabBarTop,
         },
         tabBarLabelStyle: {
           fontSize: 11,
-          fontWeight: "500",
+          fontWeight: "600",
+          letterSpacing: 0.12,
+          marginTop: 2,
         },
+        tabBarItemStyle: {
+          paddingVertical: 2,
+          paddingHorizontal: 2,
+        },
+        tabBarAllowFontScaling: false,
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Ana Sayfa",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="home" focused={focused} />
           ),
         }}
       />
@@ -37,8 +69,8 @@ export default function TabLayout() {
         name="search"
         options={{
           title: "İlaç Ara",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="search-outline" size={size} color={color} />
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="search" focused={focused} />
           ),
         }}
       />
@@ -46,8 +78,17 @@ export default function TabLayout() {
         name="pharmacy"
         options={{
           title: "Eczane",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="medical-outline" size={size} color={color} />
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="medical" focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="blog"
+        options={{
+          title: "Blog",
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="leaf" focused={focused} />
           ),
         }}
       />
@@ -55,8 +96,8 @@ export default function TabLayout() {
         name="reminders"
         options={{
           title: "Hatırlatma",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="notifications-outline" size={size} color={color} />
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="notifications" focused={focused} />
           ),
         }}
       />
@@ -64,8 +105,8 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: "Profil",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" size={size} color={color} />
+          tabBarIcon: ({ focused }) => (
+            <TabBarIonicons name="person" focused={focused} />
           ),
         }}
       />

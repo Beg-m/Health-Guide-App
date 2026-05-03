@@ -1,10 +1,22 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ScrollView,
+  Platform,
+  Alert,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter, type Href } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { Colors, ScreenPadding } from "@/constants/theme";
+
+const KEY_IS_LOGGED_IN = "isLoggedIn";
+const LOGOUT_DANGER = "#ef4444";
 
 const MENU = [
   { key: "health", label: "Sağlık profili", icon: "heart-outline" as const },
@@ -21,6 +33,29 @@ export default function ProfileScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
     router.push("/reminders");
+  };
+
+  const onLogoutPress = () => {
+    if (Platform.OS !== "web") {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    Alert.alert(
+      "Çıkış Yap",
+      "Hesabınızdan çıkmak istediğinize emin misiniz?",
+      [
+        { text: "Vazgeç", style: "cancel" },
+        {
+          text: "Çıkış Yap",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              await AsyncStorage.removeItem(KEY_IS_LOGGED_IN);
+              router.replace("/auth" as Href);
+            })();
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -84,6 +119,16 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={20} color={Colors.textSecondary} />
           </Pressable>
         ))}
+
+        <Pressable
+          style={({ pressed }) => [styles.logoutRow, pressed && { opacity: 0.92 }]}
+          onPress={onLogoutPress}
+          accessibilityRole="button"
+          accessibilityLabel="Çıkış yap"
+        >
+          <Ionicons name="log-out-outline" size={22} color={LOGOUT_DANGER} />
+          <Text style={styles.logoutLabel}>Çıkış Yap</Text>
+        </Pressable>
 
         <Text style={styles.version}>Health Guide App · v1.0.0</Text>
       </ScrollView>
@@ -178,6 +223,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.text,
     fontWeight: "500",
+  },
+  logoutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.35)",
+    gap: 12,
+  },
+  logoutLabel: {
+    flex: 1,
+    fontSize: 16,
+    color: LOGOUT_DANGER,
+    fontWeight: "600",
   },
   version: {
     textAlign: "center",
