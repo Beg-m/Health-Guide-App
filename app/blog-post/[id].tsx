@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,14 +8,17 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  useWindowDimensions,
+  Alert,
+  Image,
+  TouchableOpacity,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Video, ResizeMode } from "expo-av";
 import { WebView } from "react-native-webview";
 import { Colors, Shadows, ScreenPadding } from "@/constants/theme";
 import { KEY_IS_PREMIUM } from "@/constants/premium";
@@ -23,19 +26,237 @@ import {
   getRecipeById,
   getSeedCommentsForRecipe,
   type RecipeComment,
+  type RecipePost,
 } from "@/constants/recipesBlog";
+import {
+  addFavoriteRecipeFirestore,
+  deleteRecipe,
+  fetchFavoriteRecipeIdsFromFirestore,
+  getRecipeFromFirestore,
+  removeFavoriteRecipeFirestore,
+} from "@/lib/firestore";
+import {
+  mergeFavoriteIdLists,
+  readFavoriteIdsFromStorage,
+  writeFavoriteIdsToStorage,
+} from "@/lib/favoriteRecipes";
+import { getLocalRecipeCache, removeLocalRecipeCache } from "@/lib/recipeLocalCache";
+import { getOrCreateLocalUserId, removeMyRecipeId } from "@/lib/recipeOwnership";
 import { PremiumRequiredModal } from "@/components/PremiumRequiredModal";
 
 const KEY_IS_LOGGED_IN = "isLoggedIn";
 const BLOG_GREEN = "#16a34a";
 
 export default function BlogRecipeDetailScreen() {
-  const { width: windowWidth } = useWindowDimensions();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const recipe = typeof id === "string" ? getRecipeById(id) : undefined;
-  const slideWidth = windowWidth;
+  const [recipe, setRecipe] = useState<RecipePost | undefined | null>(null);
+  // TEMP: force owner so "..." menu shows for edit/delete testing — revert to useState(false) + restore effect below
+  const [isOwner] = useState(true);
+  const recipeIdParam = typeof id === "string" ? id : "";
+  const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<string[]>([]);
+  const detailFavorited =
+    recipeIdParam.length > 0 && favoriteRecipeIds.includes(recipeIdParam);
+
+  useEffect(() => {
+    if (typeof id !== "string" || !id) {
+      setRecipe(undefined);
+      return;
+    }
+    let cancelled = false;
+    setRecipe(null);
+    void (async () => {
+      const fromFs = await getRecipeFromFirestore(id);
+      const cache = await getLocalRecipeCache(id);
+      if (cancelled) return;
+      if (fromFs) {
+        if (cache?.imageUri?.trim() && !fromFs.imageUri?.trim()) {
+          setRecipe({ ...fromFs, imageUri: cache.imageUri.trim() });
+        } else {
+          setRecipe(fromFs);
+        }
+        return;
+      }
+      setRecipe(getRecipeById(id));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const userId = await getOrCreateLocalUserId();
+          const [fromStorage, fromFirestore] = await Promise.all([
+            readFavoriteIdsFromStorage(),
+            fetchFavoriteRecipeIdsFromFirestore(userId).catch(() => [] as string[]),
+          ]);
+          const merged = mergeFavoriteIdLists(fromStorage, fromFirestore);
+          if (cancelled) return;
+          setFavoriteRecipeIds(merged);
+          const storageKey = JSON.stringify([...fromStorage].sort());
+          const mergedKey = JSON.stringify([...merged].sort());
+          if (storageKey !== mergedKey) {
+            await writeFavoriteIdsToStorage(merged);
+          }
+        } catch {
+          if (!cancelled) {
+            const localOnly = await readFavoriteIdsFromStorage();
+            setFavoriteRecipeIds(localOnly);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+
+  /* TEMP disabled — real ownership (re-enable when removing test flag above)
+  useEffect(() => {
+    if (!recipe) {
+      setIsOwner(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const uid = await getOrCreateLocalUserId();
+      const mine = await isMyRecipe(recipe.id);
+      const own = recipe.createdBy === uid || mine;
+      if (!cancelled) setIsOwner(own);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recipe?.id, recipe?.createdBy]);
+  */
+
+  const confirmDelete = useCallback(() => {
+    if (typeof id !== "string") return;
+    Alert.alert("Tarifi Sil", "Bu tarifi silmek istediğinize emin misiniz?", [
+      { text: "İptal", style: "cancel" },
+      {
+        text: "Sil",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            try {
+              await deleteRecipe(id);
+              await removeMyRecipeId(id);
+              await removeLocalRecipeCache(id);
+              router.back();
+            } catch (e) {
+              Alert.alert("Silinemedi", e instanceof Error ? e.message : String(e));
+            }
+          })();
+        },
+      },
+    ]);
+  }, [id, router]);
+
+  const showMenu = useCallback(() => {
+    if (!recipe) return;
+    Alert.alert("", "", [
+      {
+        text: "Düzenle",
+        onPress: () =>
+          router.push({
+            pathname: "/blog-post/edit/[id]",
+            params: { id: recipe.id },
+          }),
+      },
+      { text: "Sil", style: "destructive", onPress: confirmDelete },
+      { text: "İptal", style: "cancel" },
+    ]);
+  }, [recipe, router, confirmDelete]);
+
+  const toggleFavoriteDetail = useCallback(async () => {
+    if (!recipeIdParam) return;
+    if (Platform.OS !== "web") {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    const userId = await getOrCreateLocalUserId();
+    setFavoriteRecipeIds((prev) => {
+      const had = prev.includes(recipeIdParam);
+      const next = had
+        ? prev.filter((x) => x !== recipeIdParam)
+        : [...prev, recipeIdParam];
+      void writeFavoriteIdsToStorage(next);
+      void (async () => {
+        try {
+          if (had) {
+            await removeFavoriteRecipeFirestore(userId, recipeIdParam);
+          } else {
+            await addFavoriteRecipeFirestore(userId, recipeIdParam);
+          }
+        } catch {
+          /* yerel kayıt geçerli */
+        }
+      })();
+      return next;
+    });
+  }, [recipeIdParam]);
+
+  useLayoutEffect(() => {
+    if (recipe === null || !recipe) {
+      navigation.setOptions({ headerShown: false });
+      return;
+    }
+    navigation.setOptions({
+      headerShown: true,
+      title: "Tarif",
+      headerStyle: { backgroundColor: Colors.background },
+      headerTintColor: Colors.text,
+      headerShadowVisible: true,
+      headerRight: () => (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+            marginRight: Platform.OS === "ios" ? 0 : 4,
+          }}
+        >
+          <TouchableOpacity
+            onPress={() => void toggleFavoriteDetail()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel={
+              detailFavorited ? "Favorilerden çıkar" : "Favorilere ekle"
+            }
+          >
+            <Ionicons
+              name={detailFavorited ? "bookmark" : "bookmark-outline"}
+              size={24}
+              color="#16a34a"
+            />
+          </TouchableOpacity>
+          {isOwner ? (
+            <TouchableOpacity
+              onPress={showMenu}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel="Tarif menüsü"
+            >
+              <Ionicons name="ellipsis-horizontal" size={24} color="#16a34a" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ),
+    });
+  }, [
+    navigation,
+    recipe,
+    isOwner,
+    showMenu,
+    detailFavorited,
+    toggleFavoriteDetail,
+  ]);
 
   const [liked, setLiked] = useState(false);
   const [commentText, setCommentText] = useState("");
@@ -106,6 +327,16 @@ export default function BlogRecipeDetailScreen() {
     }
   };
 
+  if (recipe === null) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={[styles.errorBox, { justifyContent: "center", flex: 1 }]}>
+          <Text style={styles.errorText}>Yükleniyor…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!recipe) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -120,47 +351,34 @@ export default function BlogRecipeDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={styles.safe} edges={["bottom"]}>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
-        <View style={[styles.topBar, Shadows.card]}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={Colors.text} />
-          </Pressable>
-          <Text style={styles.topTitle} numberOfLines={1}>
-            Tarif
-          </Text>
-          <View style={styles.backBtn} />
-        </View>
-
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {recipe.imageUrls.length > 0 && (
-            <ScrollView
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              style={styles.imageCarousel}
-              contentContainerStyle={styles.imageCarouselContent}
-            >
-              {recipe.imageUrls.map((uri, index) => (
-                <Image
-                  key={`${uri}-${index}`}
-                  source={{ uri }}
-                  style={[styles.heroImage, { width: slideWidth, height: 220 }]}
-                  contentFit="cover"
-                  transition={200}
-                  accessibilityLabel={`Tarif görseli ${index + 1}`}
-                />
-              ))}
-            </ScrollView>
-          )}
+          {recipe.imageUri ? (
+            <Image
+              source={{ uri: recipe.imageUri }}
+              style={{ width: "100%", height: 250 }}
+              resizeMode="cover"
+            />
+          ) : null}
+
+          {recipe.videoUri ? (
+            <Video
+              source={{ uri: recipe.videoUri }}
+              style={{ width: "100%", height: 250 }}
+              useNativeControls
+              resizeMode={ResizeMode.CONTAIN}
+              shouldPlay={false}
+            />
+          ) : null}
 
           {recipe.videoEmbedUrl ? (
             <View style={styles.videoWrap}>
@@ -270,10 +488,7 @@ export default function BlogRecipeDetailScreen() {
                 maxLength={500}
               />
               <Pressable
-                style={[
-                  styles.sendBtn,
-                  !commentText.trim() && styles.sendBtnDisabled,
-                ]}
+                style={[styles.sendBtn, !commentText.trim() && styles.sendBtnDisabled]}
                 onPress={onSubmitComment}
                 disabled={!commentText.trim()}
               >
@@ -333,40 +548,13 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: ScreenPadding,
-    paddingVertical: 12,
-    backgroundColor: Colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  topTitle: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 17,
-    fontWeight: "700",
-    color: Colors.text,
-  },
   scroll: {
     paddingBottom: 24,
   },
-  imageCarousel: {
-    marginBottom: 0,
-  },
-  imageCarouselContent: {},
-  heroImage: {},
   videoWrap: {
     marginBottom: 16,
     paddingHorizontal: ScreenPadding,
+    marginTop: 16,
   },
   videoLabel: {
     fontSize: 14,
@@ -531,7 +719,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     paddingHorizontal: ScreenPadding,
     paddingVertical: 12,
-    paddingBottom: Platform.OS === "ios" ? 12 : 12,
     gap: 10,
   },
   commentInput: {

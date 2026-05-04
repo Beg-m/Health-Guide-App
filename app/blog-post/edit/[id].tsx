@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,15 +13,21 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { Colors, Shadows, ScreenPadding } from "@/constants/theme";
-import { createRecipe } from "@/lib/firestore";
+import { getRecipeFromFirestore, updateRecipe } from "@/lib/firestore";
 import { saveLocalRecipeCache } from "@/lib/recipeLocalCache";
-import { addMyRecipeId, getOrCreateLocalUserId } from "@/lib/recipeOwnership";
+import { getOrCreateLocalUserId, isMyRecipe } from "@/lib/recipeOwnership";
+
+function paramStr(v: string | string[] | undefined): string {
+  if (v == null) return "";
+  const s = Array.isArray(v) ? v[0] : v;
+  return typeof s === "string" ? s : "";
+}
 
 const BLOG_GREEN = "#16a34a";
 
@@ -37,39 +43,38 @@ type MediaItem = {
   kind: MediaKind;
 };
 
-function uid() {
+function newMediaId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function paramStr(v: string | string[] | undefined): string {
-  if (v == null) return "";
-  const s = Array.isArray(v) ? v[0] : v;
-  return typeof s === "string" ? s : "";
-}
-
-function showPublishToastThenNavigate(router: ReturnType<typeof useRouter>) {
-  if (Platform.OS === "android") {
-    ToastAndroid.show("Tarif başarıyla paylaşıldı!", ToastAndroid.SHORT);
-    router.back();
-  } else {
-    Alert.alert("Başarılı", "Tarif başarıyla paylaşıldı.", [
-      { text: "Tamam", onPress: () => router.back() },
-    ]);
-  }
 }
 
 function showFirestoreError(message: string) {
   Alert.alert("Kayıt hatası", message);
 }
 
-export default function NewBlogRecipeScreen() {
+function showUpdateSuccess(router: ReturnType<typeof useRouter>, recipeId: string) {
+  if (Platform.OS === "android") {
+    ToastAndroid.show("Tarif güncellendi!", ToastAndroid.SHORT);
+    router.replace(`/blog-post/${recipeId}`);
+  } else {
+    Alert.alert("Başarılı", "Tarif güncellendi.", [
+      { text: "Tamam", onPress: () => router.replace(`/blog-post/${recipeId}`) },
+    ]);
+  }
+}
+
+export default function EditBlogRecipeScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
-    prefilledMedia?: string | string[];
-    mediaType?: string | string[];
+    id: string | string[];
+    prefillTitle?: string | string[];
+    prefillTags?: string | string[];
+    prefillIngredients?: string | string[];
+    prefillSteps?: string | string[];
+    prefillNotes?: string | string[];
+    prefillImageUri?: string | string[];
   }>();
-  const prefilledMedia = paramStr(params.prefilledMedia);
-  const mediaTypeParam = paramStr(params.mediaType);
+  const recipeId = paramStr(params.id);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
 
   const [title, setTitle] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -77,32 +82,69 @@ export default function NewBlogRecipeScreen() {
   const [steps, setSteps] = useState("");
   const [notes, setNotes] = useState("");
   const [media, setMedia] = useState<MediaItem[]>([]);
-  /** Tam URI dizisi (kapak = ilk öğe); Firestore `imageUri` ile eşlenir */
-  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const selectedVideo = useMemo(() => {
-    const v = media.find((m) => m.kind === "video" || m.kind === "reel");
-    return v?.uri?.trim() ?? "";
-  }, [media]);
-
   useEffect(() => {
-    const uri = prefilledMedia.trim();
-    if (!uri) return;
-    const isVideo = mediaTypeParam === "video";
-    if (isVideo) {
-      setMedia((m) => {
-        if (m.some((x) => x.uri === uri)) return m;
-        return [...m, { id: uid(), uri, kind: "reel" as const }];
-      });
-    } else {
-      setSelectedImages((prev) => (prev.includes(uri) ? prev : [...prev, uri]));
-      setMedia((m) => {
-        if (m.some((x) => x.uri === uri)) return m;
-        return [...m, { id: uid(), uri, kind: "image" as const }];
-      });
+    if (typeof recipeId !== "string" || !recipeId) {
+      setLoadState("error");
+      return;
     }
-  }, [prefilledMedia, mediaTypeParam]);
+    let cancelled = false;
+    void (async () => {
+      const r = await getRecipeFromFirestore(recipeId);
+      if (cancelled) return;
+      if (!r) {
+        Alert.alert("Tarif bulunamadı", "Bu tarif düzenlenemez.", [
+          { text: "Tamam", onPress: () => router.back() },
+        ]);
+        setLoadState("error");
+        return;
+      }
+      const uid = await getOrCreateLocalUserId();
+      const mine = await isMyRecipe(recipeId);
+      if (r.createdBy !== uid && !mine) {
+        Alert.alert(
+          "Yetkisiz",
+          "Bu tarifi yalnızca oluşturan kullanıcı düzenleyebilir.",
+          [{ text: "Tamam", onPress: () => router.back() }]
+        );
+        setLoadState("error");
+        return;
+      }
+      const pImg = paramStr(params.prefillImageUri);
+      setTitle(r.title);
+      setSelectedCategories([...r.tags]);
+      setIngredients(r.ingredients.join("\n"));
+      setSteps(r.steps.join("\n"));
+      setNotes(r.summary);
+      const uris =
+        r.imageUrls.length > 0
+          ? r.imageUrls
+          : r.imageUri
+            ? [r.imageUri]
+            : pImg
+              ? [pImg]
+              : [];
+      const imageItems: MediaItem[] = uris.map((uri) => ({
+        id: newMediaId(),
+        uri,
+        kind: "image" as const,
+      }));
+      const v = r.videoUri?.trim();
+      setMedia(
+        v
+          ? [
+              ...imageItems,
+              { id: newMediaId(), uri: v, kind: "reel" as const },
+            ]
+          : imageItems
+      );
+      if (!cancelled) setLoadState("ready");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recipeId, router]);
 
   const toggleCategory = (c: string) => {
     setSelectedCategories((prev) =>
@@ -140,13 +182,11 @@ export default function NewBlogRecipeScreen() {
           : {}),
       });
       if (!result.canceled && result.assets?.length) {
-        const uris = result.assets.map((a) => String(a.uri ?? "").trim()).filter(Boolean);
         const next: MediaItem[] = result.assets.map((a) => ({
-          id: uid(),
-          uri: String(a.uri ?? "").trim(),
+          id: newMediaId(),
+          uri: a.uri,
           kind: "image" as const,
         }));
-        setSelectedImages((prev) => [...prev, ...uris]);
         setMedia((m) => [...m, ...next]);
       }
     } finally {
@@ -166,7 +206,7 @@ export default function NewBlogRecipeScreen() {
       });
       if (!result.canceled && result.assets?.[0]) {
         const a = result.assets[0];
-        setMedia((m) => [...m, { id: uid(), uri: a.uri, kind: "video" }]);
+        setMedia((m) => [...m, { id: newMediaId(), uri: a.uri, kind: "video" }]);
       }
     } finally {
       setBusy(false);
@@ -193,25 +233,20 @@ export default function NewBlogRecipeScreen() {
           );
           return;
         }
-        setMedia((m) => [...m, { id: uid(), uri: a.uri, kind: "reel" }]);
+        setMedia((m) => [...m, { id: newMediaId(), uri: a.uri, kind: "reel" }]);
       }
     } finally {
       setBusy(false);
     }
   };
 
-  const removeMedia = (id: string) => {
-    setMedia((m) => {
-      const removed = m.find((x) => x.id === id);
-      if (removed?.kind === "image" && removed.uri) {
-        setSelectedImages((imgs) => imgs.filter((u) => u !== removed.uri));
-      }
-      return m.filter((x) => x.id !== id);
-    });
+  const removeMedia = (mid: string) => {
+    setMedia((m) => m.filter((x) => x.id !== mid));
   };
 
   const submit = () => {
     const t = title.trim();
+    if (typeof recipeId !== "string" || !recipeId) return;
     if (!t) {
       Alert.alert("Eksik bilgi", "Lütfen tarif başlığı girin.");
       return;
@@ -219,26 +254,23 @@ export default function NewBlogRecipeScreen() {
     setBusy(true);
     void (async () => {
       try {
-        const fromMedia = media.filter((m) => m.kind === "image").map((m) => m.uri.trim()).filter(Boolean);
-        const imageUris =
-          selectedImages.filter((u) => u.trim()).length > 0
-            ? selectedImages.map((u) => u.trim()).filter(Boolean)
-            : fromMedia;
-        const imageUri = selectedImages[0] ?? imageUris[0] ?? "";
-        const createdBy = await getOrCreateLocalUserId();
-        // Recipe payload → Firestore (createRecipe)
-        const recipeId = await createRecipe({
+        const imageUris = media
+          .filter((m) => m.kind === "image")
+          .map((m) => m.uri.trim())
+          .filter(Boolean);
+        const imageUri = imageUris[0] ?? "";
+        const videoItem = media.find((m) => m.kind === "video" || m.kind === "reel");
+        const videoUri = videoItem?.uri?.trim() ?? "";
+        await updateRecipe(recipeId, {
           title: t,
           tags: selectedCategories,
           ingredientsText: ingredients,
           stepsText: steps,
           notes: notes.trim(),
           imageUris,
-          imageUri,
-          videoUri: selectedVideo || undefined,
-          createdBy,
+          imageUri: imageUri || undefined,
+          videoUri,
         });
-        await addMyRecipeId(recipeId);
         await saveLocalRecipeCache({
           id: recipeId,
           title: t,
@@ -247,7 +279,7 @@ export default function NewBlogRecipeScreen() {
         if (Platform.OS !== "web") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
-        showPublishToastThenNavigate(router);
+        showUpdateSuccess(router, recipeId);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         showFirestoreError(msg);
@@ -256,6 +288,19 @@ export default function NewBlogRecipeScreen() {
       }
     })();
   };
+
+  if (loadState === "loading") {
+    return (
+      <SafeAreaView style={[styles.safe, styles.centered]} edges={["top"]}>
+        <ActivityIndicator size="large" color={BLOG_GREEN} />
+        <Text style={styles.loadingText}>Tarif yükleniyor…</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadState === "error") {
+    return <View style={styles.flex} />;
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -267,7 +312,7 @@ export default function NewBlogRecipeScreen() {
           <Pressable onPress={() => router.back()} style={styles.iconBtn} hitSlop={8}>
             <Ionicons name="arrow-back" size={24} color={Colors.text} />
           </Pressable>
-          <Text style={styles.topTitle}>Yeni tarif</Text>
+          <Text style={styles.topTitle}>Tarifi düzenle</Text>
           <View style={styles.iconBtn} />
         </View>
 
@@ -412,7 +457,7 @@ export default function NewBlogRecipeScreen() {
             onPress={submit}
             disabled={busy}
           >
-            <Text style={styles.submitBtnText}>Tarifi Paylaş</Text>
+            <Text style={styles.submitBtnText}>Güncelle</Text>
           </Pressable>
           <View style={{ height: 32 }} />
         </ScrollView>
@@ -428,6 +473,15 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
+  },
+  centered: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 15,
+    color: Colors.textSecondary,
   },
   topBar: {
     flexDirection: "row",

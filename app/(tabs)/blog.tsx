@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,15 @@ import {
   ScrollView,
   Platform,
   Animated,
+  ActivityIndicator,
+  Image,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import {
   Colors,
@@ -23,56 +27,103 @@ import {
   headerTitleStyle,
 } from "@/constants/theme";
 import { SAMPLE_STORY_REELS } from "@/constants/blogStories";
+import type { RecipePost } from "@/constants/recipesBlog";
+import { displayImageUri } from "@/lib/displayImageUri";
 import { PremiumRequiredModal } from "@/components/PremiumRequiredModal";
 import { BlogStoryReelsStrip } from "@/components/BlogStoryReels";
 import { FadeInView } from "@/components/FadeInView";
 import { PressableScale } from "@/components/PressableScale";
+import {
+  addFavoriteRecipeFirestore,
+  fetchFavoriteRecipeIdsFromFirestore,
+  removeFavoriteRecipeFirestore,
+  subscribeRecipes,
+} from "@/lib/firestore";
+import {
+  mergeFavoriteIdLists,
+  readFavoriteIdsFromStorage,
+  writeFavoriteIdsToStorage,
+} from "@/lib/favoriteRecipes";
+import { getOrCreateLocalUserId } from "@/lib/recipeOwnership";
+import { Video, ResizeMode } from "expo-av";
 
 const BLOG_GREEN = "#16a34a";
 
 const IS_PREMIUM_USER = true;
 
-const SAMPLE_RECIPES = [
-  {
-    id: "1",
-    title: "Kinoa Salatası (Glütensiz)",
-    author: "Dyt. Selin Yılmaz",
-    likes: 128,
-    comments: 14,
-    tags: ["Çölyak", "Vegan", "Düşük Kalori"],
-  },
-  {
-    id: "2",
-    title: "Fırında Sebzeli Mercimek Köftesi",
-    author: "Şef Emre Kaya",
-    likes: 256,
-    comments: 31,
-    tags: ["Vegan", "Yüksek Protein"],
-  },
-  {
-    id: "3",
-    title: "Yulaf Lapası (Düşük Glisemik İndeks)",
-    author: "Dyt. Ayşe Demir",
-    likes: 89,
-    comments: 9,
-    tags: ["Diyabet", "Düşük Kalori"],
-  },
-  {
-    id: "4",
-    title: "Izgara Somon & Kuşkonmaz",
-    author: "Sağlıklı Mutfak",
-    likes: 412,
-    comments: 52,
-    tags: ["Düşük Kalori", "Yüksek Protein"],
-  },
-] as const;
-
-type SampleRecipe = (typeof SAMPLE_RECIPES)[number];
+type BlogFeedFilter = "all" | "favorites";
 
 export default function BlogScreen() {
   const router = useRouter();
   const [likedIds, setLikedIds] = useState<Record<string, boolean>>({});
   const [premiumModalVisible, setPremiumModalVisible] = useState(false);
+  const [recipes, setRecipes] = useState<RecipePost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<string[]>([]);
+  const [feedFilter, setFeedFilter] = useState<BlogFeedFilter>("all");
+
+  const storyFeed = useMemo(() => SAMPLE_STORY_REELS, []);
+
+  const favoriteIdSet = useMemo(
+    () => new Set(favoriteRecipeIds),
+    [favoriteRecipeIds]
+  );
+
+  const displayedRecipes = useMemo(() => {
+    if (feedFilter === "favorites") {
+      return recipes.filter((r) => favoriteIdSet.has(r.id));
+    }
+    return recipes;
+  }, [recipes, feedFilter, favoriteIdSet]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const userId = await getOrCreateLocalUserId();
+          const [fromStorage, fromFirestore] = await Promise.all([
+            readFavoriteIdsFromStorage(),
+            fetchFavoriteRecipeIdsFromFirestore(userId).catch(() => [] as string[]),
+          ]);
+          const merged = mergeFavoriteIdLists(fromStorage, fromFirestore);
+          if (cancelled) return;
+          setFavoriteRecipeIds(merged);
+          const storageKey = JSON.stringify([...fromStorage].sort());
+          const mergedKey = JSON.stringify([...merged].sort());
+          if (storageKey !== mergedKey) {
+            await writeFavoriteIdsToStorage(merged);
+          }
+        } catch {
+          if (!cancelled) {
+            const localOnly = await readFavoriteIdsFromStorage();
+            setFavoriteRecipeIds(localOnly);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    setLoading(true);
+    setLoadError(null);
+    const unsub = subscribeRecipes(
+      (list) => {
+        setRecipes(list);
+        setLoading(false);
+        setLoadError(null);
+      },
+      (err) => {
+        setLoadError(err.message);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
 
   const onToggleLike = (recipeId: string) => {
     if (Platform.OS !== "web") {
@@ -105,6 +156,134 @@ export default function BlogScreen() {
     router.push("/reminders");
   };
 
+  const toggleFavoriteRecipe = useCallback(async (recipeId: string) => {
+    if (Platform.OS !== "web") {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    const userId = await getOrCreateLocalUserId();
+    setFavoriteRecipeIds((prev) => {
+      const had = prev.includes(recipeId);
+      const next = had ? prev.filter((id) => id !== recipeId) : [...prev, recipeId];
+      void writeFavoriteIdsToStorage(next);
+      void (async () => {
+        try {
+          if (had) {
+            await removeFavoriteRecipeFirestore(userId, recipeId);
+          } else {
+            await addFavoriteRecipeFirestore(userId, recipeId);
+          }
+        } catch {
+          /* ağ / kurallar — yerel liste yine güncel */
+        }
+      })();
+      return next;
+    });
+  }, []);
+
+  const handleCameraPress = useCallback(() => {
+    if (Platform.OS === "web") {
+      Alert.alert(
+        "Bilgi",
+        "Kamera ve galeri bu ortamda sınırlı olabilir. Lütfen mobil uygulamayı kullanın."
+      );
+      return;
+    }
+
+    Alert.alert("İçerik Ekle", "Nasıl eklemek istersiniz?", [
+      {
+        text: "📸 Kamera - Fotoğraf",
+        onPress: () => {
+          void (async () => {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== "granted") {
+              Alert.alert("İzin Gerekli", "Kamera izni gerekiyor.");
+              return;
+            }
+            const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsEditing: true,
+              quality: 0.8,
+            });
+            if (!result.canceled && result.assets[0]) {
+              router.push({
+                pathname: "/blog-post/new",
+                params: {
+                  prefilledMedia: result.assets[0].uri,
+                  mediaType: "image",
+                },
+              });
+            }
+          })();
+        },
+      },
+      {
+        text: "🎬 Kamera - Video",
+        onPress: () => {
+          void (async () => {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== "granted") {
+              Alert.alert("İzin Gerekli", "Kamera izni gerekiyor.");
+              return;
+            }
+            const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+              videoMaxDuration: 60,
+            });
+            if (!result.canceled && result.assets[0]) {
+              router.push({
+                pathname: "/blog-post/new",
+                params: {
+                  prefilledMedia: result.assets[0].uri,
+                  mediaType: "video",
+                },
+              });
+            }
+          })();
+        },
+      },
+      {
+        text: "🖼️ Galeri - Fotoğraf",
+        onPress: () => {
+          void (async () => {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              quality: 0.8,
+            });
+            if (!result.canceled && result.assets[0]) {
+              router.push({
+                pathname: "/blog-post/new",
+                params: {
+                  prefilledMedia: result.assets[0].uri,
+                  mediaType: "image",
+                },
+              });
+            }
+          })();
+        },
+      },
+      {
+        text: "🎥 Galeri - Video",
+        onPress: () => {
+          void (async () => {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+            });
+            if (!result.canceled && result.assets[0]) {
+              router.push({
+                pathname: "/blog-post/new",
+                params: {
+                  prefilledMedia: result.assets[0].uri,
+                  mediaType: "video",
+                },
+              });
+            }
+          })();
+        },
+      },
+      { text: "İptal", style: "cancel" },
+    ]);
+  }, [router]);
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <FadeInView style={{ flex: 1 }}>
@@ -112,23 +291,91 @@ export default function BlogScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <BlogStoryReelsStrip stories={SAMPLE_STORY_REELS} />
+          <BlogStoryReelsStrip
+            stories={storyFeed}
+            onCameraPress={handleCameraPress}
+            onAddStoryPress={handleCameraPress}
+          />
 
           <View style={styles.header}>
             <Text style={styles.title}>Sağlıklı Tarifler</Text>
             <Text style={styles.subtitle}>Topluluğumuzdan tarifler ve ipuçları</Text>
+            <View style={styles.feedFilterRow}>
+              <Pressable
+                onPress={() => setFeedFilter("all")}
+                style={[
+                  styles.feedFilterPill,
+                  feedFilter === "all" && styles.feedFilterPillActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.feedFilterPillText,
+                    feedFilter === "all" && styles.feedFilterPillTextActive,
+                  ]}
+                >
+                  Tümü
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setFeedFilter("favorites")}
+                style={[
+                  styles.feedFilterPill,
+                  feedFilter === "favorites" && styles.feedFilterPillActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.feedFilterPillText,
+                    feedFilter === "favorites" && styles.feedFilterPillTextActive,
+                  ]}
+                >
+                  Favorilerim
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
-          {SAMPLE_RECIPES.map((recipe) => (
-            <RecipeCard
-              key={recipe.id}
-              recipe={recipe}
-              liked={!!likedIds[recipe.id]}
-              onCardPress={() => openDetail(recipe.id)}
-              onLike={() => onToggleLike(recipe.id)}
-              onComment={() => onCommentPress(recipe.id)}
-            />
-          ))}
+          {loading ? (
+            <View style={styles.centerBox}>
+              <ActivityIndicator size="large" color={BLOG_GREEN} />
+              <Text style={styles.hintMuted}>Tarifler yükleniyor…</Text>
+            </View>
+          ) : loadError ? (
+            <View style={styles.centerBox}>
+              <Text style={styles.errorText}>{loadError}</Text>
+              <Text style={styles.hintMuted}>
+                Firebase yapılandırmasını ve Firestore kurallarını kontrol edin.
+              </Text>
+            </View>
+          ) : recipes.length === 0 ? (
+            <View style={styles.centerBox}>
+              <Text style={styles.emptyTitle}>Henüz tarif yok</Text>
+              <Text style={styles.hintMuted}>
+                İlk tarifi paylaşmak için + düğmesine dokunun.
+              </Text>
+            </View>
+          ) : displayedRecipes.length === 0 && feedFilter === "favorites" ? (
+            <View style={styles.centerBox}>
+              <Text style={styles.emptyTitle}>Henüz favori tarif yok</Text>
+              <Text style={styles.hintMuted}>
+                Tarif kartındaki yer imi simgesine dokunarak favorilerinize ekleyin.
+              </Text>
+            </View>
+          ) : (
+            displayedRecipes.map((recipe) => (
+              <RecipeCard
+                key={recipe.id}
+                recipe={recipe}
+                liked={!!likedIds[recipe.id]}
+                favorited={favoriteIdSet.has(recipe.id)}
+                onCardPress={() => openDetail(recipe.id)}
+                onLike={() => onToggleLike(recipe.id)}
+                onComment={() => onCommentPress(recipe.id)}
+                onToggleFavorite={() => void toggleFavoriteRecipe(recipe.id)}
+              />
+            ))
+          )}
         </ScrollView>
       </FadeInView>
 
@@ -155,15 +402,19 @@ export default function BlogScreen() {
 function RecipeCard({
   recipe,
   liked,
+  favorited,
   onCardPress,
   onLike,
   onComment,
+  onToggleFavorite,
 }: {
-  recipe: SampleRecipe;
+  recipe: RecipePost;
   liked: boolean;
+  favorited: boolean;
   onCardPress: () => void;
   onLike: () => void;
   onComment: () => void;
+  onToggleFavorite: () => void;
 }) {
   const displayLikes = recipe.likes + (liked ? 1 : 0);
   const heartScale = useRef(new Animated.Value(1)).current;
@@ -192,6 +443,11 @@ function RecipeCard({
     onLike();
   };
 
+  const cardImageUri = recipe.imageUri?.trim()
+    ? displayImageUri(recipe.imageUri) ?? recipe.imageUri
+    : undefined;
+  const cardVideoUri = recipe.videoUri?.trim() ? recipe.videoUri.trim() : undefined;
+
   return (
     <View style={[styles.cardOuter, Shadows.cardMedium]}>
       <LinearGradient
@@ -200,23 +456,58 @@ function RecipeCard({
         end={{ x: 0, y: 1 }}
         style={styles.cardInner}
       >
-        <PressableScale onPress={onCardPress}>
-          <View>
-            <View style={styles.imageSection}>
-              <View style={styles.imageGradientBg}>
-                <LinearGradient
-                  colors={["#bbf7d0", "#4ade80", "#15803d"]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={StyleSheet.absoluteFillObject}
-                />
-                <LinearGradient
-                  colors={["transparent", "rgba(0,0,0,0.45)"]}
-                  style={StyleSheet.absoluteFillObject}
-                />
-                <View style={styles.imageFg}>
-                  <Ionicons name="image-outline" size={44} color="rgba(255,255,255,0.95)" />
-                  <Text style={styles.imagePlaceholderLabel}>Görsel</Text>
+        <View style={styles.imageSection}>
+          <PressableScale onPress={onCardPress}>
+            <View>
+              <View style={styles.cardImageWrap}>
+                <View style={styles.imageGradientBg}>
+                  {cardVideoUri ? (
+                    <>
+                      <Video
+                        source={{ uri: cardVideoUri }}
+                        style={StyleSheet.absoluteFillObject}
+                        resizeMode={ResizeMode.COVER}
+                        useNativeControls
+                        shouldPlay={false}
+                        accessibilityLabel="Tarif videosu"
+                      />
+                      <LinearGradient
+                        colors={["transparent", "rgba(0,0,0,0.35)"]}
+                        style={StyleSheet.absoluteFillObject}
+                        pointerEvents="none"
+                      />
+                    </>
+                  ) : cardImageUri ? (
+                    <>
+                      <Image
+                        source={{ uri: cardImageUri }}
+                        style={StyleSheet.absoluteFillObject}
+                        resizeMode="cover"
+                        accessibilityLabel="Tarif görseli"
+                      />
+                      <LinearGradient
+                        colors={["transparent", "rgba(0,0,0,0.35)"]}
+                        style={StyleSheet.absoluteFillObject}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <LinearGradient
+                        colors={["#bbf7d0", "#4ade80", "#15803d"]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={StyleSheet.absoluteFillObject}
+                      />
+                      <LinearGradient
+                        colors={["transparent", "rgba(0,0,0,0.45)"]}
+                        style={StyleSheet.absoluteFillObject}
+                      />
+                      <View style={styles.imageFg}>
+                        <Ionicons name="image-outline" size={44} color="rgba(255,255,255,0.95)" />
+                        <Text style={styles.imagePlaceholderLabel}>Görsel</Text>
+                      </View>
+                    </>
+                  )}
                 </View>
               </View>
 
@@ -246,8 +537,22 @@ function RecipeCard({
                 </View>
               </View>
             </View>
-          </View>
-        </PressableScale>
+          </PressableScale>
+          <Pressable
+            style={styles.cardFavoriteBtn}
+            onPress={onToggleFavorite}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={favorited ? "Favorilerden çıkar" : "Favorilere ekle"}
+          >
+            <Ionicons
+              name={favorited ? "bookmark" : "bookmark-outline"}
+              size={26}
+              color={favorited ? BLOG_GREEN : "#FFFFFF"}
+              style={styles.cardFavoriteIconShadow}
+            />
+          </Pressable>
+        </View>
 
         <View style={styles.actionsRow}>
           <Pressable style={styles.actionBtn} onPress={triggerLike} hitSlop={8}>
@@ -294,10 +599,57 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontWeight: "500",
   },
+  feedFilterRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  feedFilterPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: Radii.pill,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  feedFilterPillActive: {
+    backgroundColor: `${BLOG_GREEN}18`,
+    borderColor: BLOG_GREEN,
+  },
+  feedFilterPillText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: Colors.textSecondary,
+  },
+  feedFilterPillTextActive: {
+    color: BLOG_GREEN,
+  },
   scrollContent: {
     paddingHorizontal: ScreenPadding,
     paddingBottom: 120,
     gap: 16,
+  },
+  centerBox: {
+    paddingVertical: 32,
+    alignItems: "center",
+    gap: 10,
+  },
+  hintMuted: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: "center",
+    paddingHorizontal: 16,
+  },
+  errorText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Colors.text,
+    textAlign: "center",
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.text,
   },
   cardOuter: {
     borderRadius: Radii.card,
@@ -312,14 +664,38 @@ const styles = StyleSheet.create({
   },
   imageSection: {
     marginBottom: 0,
+    position: "relative",
+  },
+  cardImageWrap: {
+    marginBottom: 12,
+    position: "relative",
   },
   imageGradientBg: {
     height: 168,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
     overflow: "hidden",
     position: "relative",
+  },
+  cardFavoriteBtn: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 20,
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  cardFavoriteIconShadow: {
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.4,
+        shadowRadius: 2,
+      },
+      default: {},
+    }),
   },
   imageFg: {
     alignItems: "center",

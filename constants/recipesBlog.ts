@@ -19,9 +19,22 @@ export type RecipePost = {
   steps: string[];
   prepMinutes: number;
   imageUrls: string[];
+  /** Kapak görseli (yerel URI veya uzak URL); yoksa imageUrls[0] kullanılır */
+  imageUri?: string;
+  /** Yerel veya uzak tarif videosu URI (expo-av) */
+  videoUri?: string;
+  /** Bu cihazdaki kullanıcı kimliği (Firestore `createdBy` ile eşleşir) */
+  createdBy?: string;
   /** YouTube gömülü oynatıcı için embed URL (ör. https://www.youtube.com/embed/VIDEO_ID) */
   videoEmbedUrl?: string;
 };
+
+/** Kapak için öncelik: imageUri, sonra ilk imageUrls öğesi */
+export function getRecipeCoverUri(recipe: RecipePost): string | undefined {
+  if (recipe.imageUri?.trim()) return recipe.imageUri;
+  const first = recipe.imageUrls[0];
+  return first?.trim() ? first : undefined;
+}
 
 export const RECIPE_COMMENT_SEEDS: Record<string, RecipeComment[]> = {
   "1": [
