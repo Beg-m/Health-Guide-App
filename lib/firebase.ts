@@ -1,9 +1,7 @@
-/**
- * Firebase JS SDK (works with Expo Go). `@react-native-firebase/app` is installed
- * for optional native builds; this file only uses `firebase/app` + `firebase/firestore`.
- */
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getAuth, type Auth } from "firebase/auth";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBZjIpLZgtMGwIYjLmctu8gm6rPlBflcgg",
@@ -15,6 +13,7 @@ const firebaseConfig = {
   measurementId: "G-QEN5SD3D81",
 };
 
+// ✅ Önce app initialize et
 function getFirebaseApp(): FirebaseApp {
   if (getApps().length === 0) {
     return initializeApp(firebaseConfig);
@@ -22,5 +21,8 @@ function getFirebaseApp(): FirebaseApp {
   return getApp();
 }
 
+// ✅ Sonra diğer servisleri al
 export const firebaseApp = getFirebaseApp();
 export const db: Firestore = getFirestore(firebaseApp);
+export const auth: Auth = getAuth(firebaseApp);
+export const storage: FirebaseStorage = getStorage(firebaseApp);

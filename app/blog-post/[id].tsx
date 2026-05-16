@@ -43,8 +43,8 @@ import {
 import { getLocalRecipeCache, removeLocalRecipeCache } from "@/lib/recipeLocalCache";
 import { getOrCreateLocalUserId, removeMyRecipeId } from "@/lib/recipeOwnership";
 import { PremiumRequiredModal } from "@/components/PremiumRequiredModal";
+import { auth } from "@/lib/firebase";
 
-const KEY_IS_LOGGED_IN = "isLoggedIn";
 const BLOG_GREEN = "#16a34a";
 
 export default function BlogRecipeDetailScreen() {
@@ -53,8 +53,7 @@ export default function BlogRecipeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [recipe, setRecipe] = useState<RecipePost | undefined | null>(null);
-  // TEMP: force owner so "..." menu shows for edit/delete testing — revert to useState(false) + restore effect below
-  const [isOwner] = useState(true);
+  const [isOwner, setIsOwner] = useState(false);
   const recipeIdParam = typeof id === "string" ? id : "";
   const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<string[]>([]);
   const detailFavorited =
@@ -86,6 +85,15 @@ export default function BlogRecipeDetailScreen() {
     };
   }, [id]);
 
+  useEffect(() => {
+    const firebaseUser = auth.currentUser;
+    if (!recipe || !firebaseUser) {
+      setIsOwner(false);
+      return;
+    }
+    setIsOwner(recipe.createdBy === firebaseUser.uid);
+  }, [recipe]);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -116,25 +124,6 @@ export default function BlogRecipeDetailScreen() {
       };
     }, [])
   );
-
-  /* TEMP disabled — real ownership (re-enable when removing test flag above)
-  useEffect(() => {
-    if (!recipe) {
-      setIsOwner(false);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      const uid = await getOrCreateLocalUserId();
-      const mine = await isMyRecipe(recipe.id);
-      const own = recipe.createdBy === uid || mine;
-      if (!cancelled) setIsOwner(own);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [recipe?.id, recipe?.createdBy]);
-  */
 
   const confirmDelete = useCallback(() => {
     if (typeof id !== "string") return;
@@ -260,7 +249,7 @@ export default function BlogRecipeDetailScreen() {
 
   const [liked, setLiked] = useState(false);
   const [commentText, setCommentText] = useState("");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const isLoggedIn = !!auth.currentUser;
   const [isPremium, setIsPremium] = useState(false);
   const [premiumModalVisible, setPremiumModalVisible] = useState(false);
   const [comments, setComments] = useState<RecipeComment[]>([]);
@@ -269,12 +258,8 @@ export default function BlogRecipeDetailScreen() {
     useCallback(() => {
       let cancelled = false;
       const load = async () => {
-        const [login, premium] = await Promise.all([
-          AsyncStorage.getItem(KEY_IS_LOGGED_IN),
-          AsyncStorage.getItem(KEY_IS_PREMIUM),
-        ]);
+        const premium = await AsyncStorage.getItem(KEY_IS_PREMIUM);
         if (!cancelled) {
-          setIsLoggedIn(login === "true");
           setIsPremium(premium === "true");
         }
       };
@@ -398,11 +383,44 @@ export default function BlogRecipeDetailScreen() {
           <Text style={styles.title}>{recipe.title}</Text>
           <Text style={styles.author}>{recipe.author}</Text>
 
-          <View style={styles.metaRow}>
-            <View style={styles.metaChip}>
-              <Ionicons name="time-outline" size={18} color={BLOG_GREEN} />
-              <Text style={styles.metaText}>{recipe.prepMinutes} dk</Text>
+          <Pressable
+            style={styles.authorRow}
+            onPress={() => {
+              if (recipe.createdBy) {
+                router.push(`/user-profile/${recipe.createdBy}` as any);
+              }
+            }}
+          >
+            <View style={styles.authorAvatar}>
+              <Text style={styles.authorAvatarText}>
+                {recipe.author.charAt(0).toUpperCase()}
+              </Text>
             </View>
+            <View>
+              <Text style={styles.authorName}>{recipe.author}</Text>
+              <Text style={styles.authorSub}>Tarif sahibi</Text>
+            </View>
+          </Pressable>
+
+          <View style={styles.metaRow}>
+            {recipe.prepMinutes > 0 && (
+              <View style={styles.metaChip}>
+                <Ionicons name="time-outline" size={18} color={BLOG_GREEN} />
+                <Text style={styles.metaText}>{recipe.prepMinutes} dk hazırlık</Text>
+              </View>
+            )}
+            {(recipe as any).cookMinutes > 0 && (
+              <View style={styles.metaChip}>
+                <Ionicons name="flame-outline" size={18} color={BLOG_GREEN} />
+                <Text style={styles.metaText}>{(recipe as any).cookMinutes} dk pişirme</Text>
+              </View>
+            )}
+            {(recipe as any).servings > 0 && (
+              <View style={styles.metaChip}>
+                <Ionicons name="people-outline" size={18} color={BLOG_GREEN} />
+                <Text style={styles.metaText}>{(recipe as any).servings} kişilik</Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.tagsRow}>
@@ -412,12 +430,6 @@ export default function BlogRecipeDetailScreen() {
               </View>
             ))}
           </View>
-
-          <Text style={styles.sectionTitle}>Özet</Text>
-          <Text style={styles.body}>{recipe.summary}</Text>
-
-          <Text style={styles.sectionTitle}>Tarif</Text>
-          <Text style={styles.body}>{recipe.fullText}</Text>
 
           <Text style={styles.sectionTitle}>Malzemeler</Text>
           {recipe.ingredients.map((line, i) => (
@@ -581,6 +593,39 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.textSecondary,
     paddingHorizontal: ScreenPadding,
+  },
+  authorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: ScreenPadding,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  authorAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: `${BLOG_GREEN}20`,
+    borderWidth: 1,
+    borderColor: `${BLOG_GREEN}40`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  authorAvatarText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: BLOG_GREEN,
+  },
+  authorName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: Colors.text,
+  },
+  authorSub: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 1,
   },
   metaRow: {
     flexDirection: "row",

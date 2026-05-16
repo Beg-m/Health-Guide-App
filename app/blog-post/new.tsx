@@ -19,6 +19,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { Colors, Shadows, ScreenPadding } from "@/constants/theme";
+import { auth, db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 import { createRecipe } from "@/lib/firestore";
 import { saveLocalRecipeCache } from "@/lib/recipeLocalCache";
 import { addMyRecipeId, getOrCreateLocalUserId } from "@/lib/recipeOwnership";
@@ -73,6 +75,9 @@ export default function NewBlogRecipeScreen() {
 
   const [title, setTitle] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [prepTime, setPrepTime] = useState("");
+  const [cookTime, setCookTime] = useState("");
+  const [servings, setServings] = useState("");
   const [ingredients, setIngredients] = useState("");
   const [steps, setSteps] = useState("");
   const [notes, setNotes] = useState("");
@@ -226,6 +231,30 @@ export default function NewBlogRecipeScreen() {
             : fromMedia;
         const imageUri = selectedImages[0] ?? imageUris[0] ?? "";
         const createdBy = await getOrCreateLocalUserId();
+        const firebaseUser = auth.currentUser;
+        let authorLabel = "Health Guide Kullanıcı";
+        let createdByUid = createdBy;
+
+        if (firebaseUser) {
+          createdByUid = firebaseUser.uid;
+          try {
+            const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+            if (snap.exists()) {
+              const name = snap.data().displayName;
+              if (name && name.trim()) {
+                authorLabel = name.trim();
+              } else if (firebaseUser.displayName?.trim()) {
+                authorLabel = firebaseUser.displayName.trim();
+              }
+            } else if (firebaseUser.displayName?.trim()) {
+              authorLabel = firebaseUser.displayName.trim();
+            }
+          } catch {
+            if (firebaseUser.displayName?.trim()) {
+              authorLabel = firebaseUser.displayName.trim();
+            }
+          }
+        }
         // Recipe payload → Firestore (createRecipe)
         const recipeId = await createRecipe({
           title: t,
@@ -236,7 +265,9 @@ export default function NewBlogRecipeScreen() {
           imageUris,
           imageUri,
           videoUri: selectedVideo || undefined,
-          createdBy,
+          authorLabel,
+          createdBy: createdByUid,
+          prepMinutes: parseInt(prepTime, 10) || 0,
         });
         await addMyRecipeId(recipeId);
         await saveLocalRecipeCache({
@@ -305,6 +336,36 @@ export default function NewBlogRecipeScreen() {
               );
             })}
           </View>
+
+          <Text style={styles.label}>Hazırlama Süresi (dakika)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Örn: 15"
+            placeholderTextColor={Colors.textSecondary}
+            value={prepTime}
+            onChangeText={setPrepTime}
+            keyboardType="number-pad"
+          />
+
+          <Text style={styles.label}>Pişirme Süresi (dakika)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Örn: 30"
+            placeholderTextColor={Colors.textSecondary}
+            value={cookTime}
+            onChangeText={setCookTime}
+            keyboardType="number-pad"
+          />
+
+          <Text style={styles.label}>Kaç Kişilik</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Örn: 4"
+            placeholderTextColor={Colors.textSecondary}
+            value={servings}
+            onChangeText={setServings}
+            keyboardType="number-pad"
+          />
 
           <Text style={styles.label}>Malzemeler</Text>
           <TextInput

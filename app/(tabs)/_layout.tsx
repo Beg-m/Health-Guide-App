@@ -59,6 +59,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
+          headerShown: false,
           title: "Ana Sayfa",
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="home" focused={focused} />
@@ -69,6 +70,7 @@ export default function TabLayout() {
         name="search"
         options={{
           title: "İlaç Ara",
+          headerShown: false,
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="search" focused={focused} />
           ),
@@ -78,6 +80,7 @@ export default function TabLayout() {
         name="pharmacy"
         options={{
           title: "Eczane",
+          headerShown: false,
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="medical" focused={focused} />
           ),
@@ -87,6 +90,7 @@ export default function TabLayout() {
         name="blog"
         options={{
           title: "Blog",
+          headerShown: false,
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="leaf" focused={focused} />
           ),
@@ -96,6 +100,7 @@ export default function TabLayout() {
         name="reminders"
         options={{
           title: "Hatırlatma",
+          headerShown: false,
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="notifications" focused={focused} />
           ),
@@ -105,6 +110,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: "Profil",
+          headerShown: false,
           tabBarIcon: ({ focused }) => (
             <TabBarIonicons name="person" focused={focused} />
           ),

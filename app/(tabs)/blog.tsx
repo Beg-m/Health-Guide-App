@@ -33,6 +33,9 @@ import { PremiumRequiredModal } from "@/components/PremiumRequiredModal";
 import { BlogStoryReelsStrip } from "@/components/BlogStoryReels";
 import { FadeInView } from "@/components/FadeInView";
 import { PressableScale } from "@/components/PressableScale";
+import { auth, db } from "@/lib/firebase";
+import { collection, doc, getDoc, getDocs, updateDoc } from "firebase/firestore";
+import { followUser } from "@/lib/followStorage";
 import {
   addFavoriteRecipeFirestore,
   fetchFavoriteRecipeIdsFromFirestore,
@@ -40,11 +43,9 @@ import {
   subscribeRecipes,
 } from "@/lib/firestore";
 import {
-  mergeFavoriteIdLists,
   readFavoriteIdsFromStorage,
   writeFavoriteIdsToStorage,
 } from "@/lib/favoriteRecipes";
-import { getOrCreateLocalUserId } from "@/lib/recipeOwnership";
 import { Video, ResizeMode } from "expo-av";
 
 const BLOG_GREEN = "#16a34a";
@@ -58,6 +59,7 @@ export default function BlogScreen() {
   const [likedIds, setLikedIds] = useState<Record<string, boolean>>({});
   const [premiumModalVisible, setPremiumModalVisible] = useState(false);
   const [recipes, setRecipes] = useState<RecipePost[]>([]);
+  const [followedIds, setFollowedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<string[]>([]);
@@ -81,30 +83,32 @@ export default function BlogScreen() {
     useCallback(() => {
       let cancelled = false;
       void (async () => {
+        const firebaseUser = auth.currentUser;
+        if (!firebaseUser) return;
+        const userId = firebaseUser.uid;
         try {
-          const userId = await getOrCreateLocalUserId();
-          const [fromStorage, fromFirestore] = await Promise.all([
-            readFavoriteIdsFromStorage(),
-            fetchFavoriteRecipeIdsFromFirestore(userId).catch(() => [] as string[]),
-          ]);
-          const merged = mergeFavoriteIdLists(fromStorage, fromFirestore);
-          if (cancelled) return;
-          setFavoriteRecipeIds(merged);
-          const storageKey = JSON.stringify([...fromStorage].sort());
-          const mergedKey = JSON.stringify([...merged].sort());
-          if (storageKey !== mergedKey) {
-            await writeFavoriteIdsToStorage(merged);
+          const fromFirestore = await fetchFavoriteRecipeIdsFromFirestore(userId)
+            .catch(() => [] as string[]);
+          if (!cancelled) {
+            setFavoriteRecipeIds(fromFirestore);
+            await writeFavoriteIdsToStorage(fromFirestore);
           }
+          try {
+            const snap = await getDocs(
+              collection(db, "users", firebaseUser.uid, "following")
+            );
+            if (!cancelled) {
+              setFollowedIds(snap.docs.map((d) => d.id));
+            }
+          } catch {}
         } catch {
           if (!cancelled) {
-            const localOnly = await readFavoriteIdsFromStorage();
-            setFavoriteRecipeIds(localOnly);
+            const local = await readFavoriteIdsFromStorage();
+            setFavoriteRecipeIds(local);
           }
         }
       })();
-      return () => {
-        cancelled = true;
-      };
+      return () => { cancelled = true; };
     }, [])
   );
 
@@ -124,6 +128,33 @@ export default function BlogScreen() {
     );
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser || recipes.length === 0) return;
+
+    const fixAuthors = async () => {
+      try {
+        const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+        const displayName = snap.exists() ? snap.data().displayName : null;
+        if (!displayName) return;
+
+        const toFix = recipes.filter(
+          (r) =>
+            r.createdBy === firebaseUser.uid &&
+            (r.author === "Health Guide Kullanıcı" || !r.author)
+        );
+
+        await Promise.all(
+          toFix.map((r) =>
+            updateDoc(doc(db, "recipes", r.id), { author: displayName })
+          )
+        );
+      } catch {}
+    };
+
+    void fixAuthors();
+  }, [recipes]);
 
   const onToggleLike = (recipeId: string) => {
     if (Platform.OS !== "web") {
@@ -160,10 +191,15 @@ export default function BlogScreen() {
     if (Platform.OS !== "web") {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
-    const userId = await getOrCreateLocalUserId();
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) return;
+    const userId = firebaseUser.uid;
+
     setFavoriteRecipeIds((prev) => {
       const had = prev.includes(recipeId);
-      const next = had ? prev.filter((id) => id !== recipeId) : [...prev, recipeId];
+      const next = had
+        ? prev.filter((id) => id !== recipeId)
+        : [...prev, recipeId];
       void writeFavoriteIdsToStorage(next);
       void (async () => {
         try {
@@ -172,9 +208,7 @@ export default function BlogScreen() {
           } else {
             await addFavoriteRecipeFirestore(userId, recipeId);
           }
-        } catch {
-          /* ağ / kurallar — yerel liste yine güncel */
-        }
+        } catch {}
       })();
       return next;
     });
@@ -298,8 +332,32 @@ export default function BlogScreen() {
           />
 
           <View style={styles.header}>
-            <Text style={styles.title}>Sağlıklı Tarifler</Text>
-            <Text style={styles.subtitle}>Topluluğumuzdan tarifler ve ipuçları</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <View>
+                <Text style={styles.title}>Sağlıklı Tarifler</Text>
+                <Text style={styles.subtitle}>Topluluğumuzdan tarifler ve ipuçları</Text>
+              </View>
+              <Pressable style={styles.reelsBtn} onPress={() => router.push("/reels")}>
+                <LinearGradient
+                  colors={["#ff6b35", "#f72585", "#7209b7"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.reelsBtnGradient}
+                >
+                  <Ionicons name="play-circle" size={18} color="#fff" />
+                  <Text style={styles.reelsBtnText}>Reels</Text>
+                  <View style={styles.reelsBtnLive}>
+                    <Text style={styles.reelsBtnLiveText}>YENİ</Text>
+                  </View>
+                </LinearGradient>
+              </Pressable>
+            </View>
             <View style={styles.feedFilterRow}>
               <Pressable
                 onPress={() => setFeedFilter("all")}
@@ -373,6 +431,14 @@ export default function BlogScreen() {
                 onLike={() => onToggleLike(recipe.id)}
                 onComment={() => onCommentPress(recipe.id)}
                 onToggleFavorite={() => void toggleFavoriteRecipe(recipe.id)}
+                followedIds={followedIds}
+                onFollow={async (uid) => {
+                  const firebaseUser = auth.currentUser;
+                  if (!firebaseUser || uid === firebaseUser.uid) return;
+                  if (followedIds.includes(uid)) return;
+                  await followUser(firebaseUser.uid, uid);
+                  setFollowedIds((prev) => [...prev, uid]);
+                }}
               />
             ))
           )}
@@ -407,6 +473,8 @@ function RecipeCard({
   onLike,
   onComment,
   onToggleFavorite,
+  followedIds,
+  onFollow,
 }: {
   recipe: RecipePost;
   liked: boolean;
@@ -415,7 +483,10 @@ function RecipeCard({
   onLike: () => void;
   onComment: () => void;
   onToggleFavorite: () => void;
+  followedIds: string[];
+  onFollow: (uid: string) => void;
 }) {
+  const router = useRouter();
   const displayLikes = recipe.likes + (liked ? 1 : 0);
   const heartScale = useRef(new Animated.Value(1)).current;
   const prevLiked = useRef(liked);
@@ -513,7 +584,50 @@ function RecipeCard({
 
               <View style={styles.cardBody}>
                 <Text style={styles.cardTitle}>{recipe.title}</Text>
-                <Text style={styles.cardAuthor}>{recipe.author}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                  <Pressable
+                    onPress={() => {
+                      if (recipe.createdBy) {
+                        router.push(`/user-profile/${recipe.createdBy}` as any);
+                      }
+                    }}
+                  >
+                    <Text style={styles.cardAuthor}>{recipe.author}</Text>
+                  </Pressable>
+                  {recipe.createdBy && recipe.createdBy !== auth.currentUser?.uid && (
+                    <Pressable
+                      onPress={() => {
+                        if (!followedIds.includes(recipe.createdBy!)) {
+                          onFollow(recipe.createdBy!);
+                        }
+                      }}
+                      style={{
+                        backgroundColor: followedIds.includes(recipe.createdBy)
+                          ? Colors.card
+                          : Colors.primary,
+                        borderRadius: 8,
+                        paddingVertical: 3,
+                        paddingHorizontal: 8,
+                        borderWidth: followedIds.includes(recipe.createdBy) ? 1 : 0,
+                        borderColor: Colors.border,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: followedIds.includes(recipe.createdBy)
+                            ? Colors.textSecondary
+                            : "#fff",
+                          fontSize: 11,
+                          fontWeight: "700",
+                        }}
+                      >
+                        {followedIds.includes(recipe.createdBy)
+                          ? "Takip Ediliyor"
+                          : "+ Takip"}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
 
                 <View style={styles.tagsRow}>
                   {recipe.tags.map((tag) => {
@@ -598,6 +712,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textSecondary,
     fontWeight: "500",
+  },
+  reelsBtn: {
+    borderRadius: 14,
+    overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#f72585",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.5,
+        shadowRadius: 8,
+      },
+      android: { elevation: 6 },
+    }),
+  },
+  reelsBtnGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  reelsBtnText: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 15,
+    letterSpacing: 0.3,
+  },
+  reelsBtnLive: {
+    backgroundColor: "rgba(255,255,255,0.25)",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  reelsBtnLiveText: {
+    fontSize: 9,
+    fontWeight: "900",
+    color: "#fff",
+    letterSpacing: 0.5,
   },
   feedFilterRow: {
     flexDirection: "row",

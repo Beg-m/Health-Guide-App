@@ -1,9 +1,19 @@
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  useWindowDimensions,
+  Image,
+  Pressable,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
 import { STORAGE_USER_CONDITIONS } from "@/constants/onboardingStorage";
 import {
@@ -82,6 +92,9 @@ function useQuickCardWidth() {
 
 export default function HomeScreen() {
   const router = useRouter();
+  const [profileName, setProfileName] = useState("");
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+
   const quickCardWidth = useQuickCardWidth();
   const { prefs, reload } = useHealthProfile();
   const [userConditions, setUserConditions] = useState<string[]>([]);
@@ -108,6 +121,19 @@ export default function HomeScreen() {
     useCallback(() => {
       void reload();
       void loadUserConditions();
+
+      const user = auth.currentUser;
+      if (user) {
+        getDoc(doc(db, "users", user.uid))
+          .then((snap) => {
+            if (snap.exists()) {
+              const data = snap.data();
+              setProfileName(data.displayName ?? "");
+              setProfilePhoto(data.photoURL ?? null);
+            }
+          })
+          .catch(() => {});
+      }
     }, [reload, loadUserConditions])
   );
 
@@ -130,15 +156,32 @@ export default function HomeScreen() {
             style={styles.hero}
           >
             <View style={styles.logoRow}>
-              <LinearGradient
-                colors={["#ffffff", "#ecfdf5"]}
-                style={styles.logoMark}
-              >
+              <LinearGradient colors={["#ffffff", "#ecfdf5"]} style={styles.logoMark}>
                 <Ionicons name="heart" size={26} color={Colors.primary} />
               </LinearGradient>
               <Text style={styles.logoText}>Health Guide App</Text>
+              <View style={{ flex: 1 }} />
+              <Pressable
+                onPress={() => router.push("/(tabs)/profile")}
+                style={styles.headerAvatarBtn}
+              >
+                {profilePhoto ? (
+                  <Image source={{ uri: profilePhoto }} style={styles.headerAvatarImage} />
+                ) : (
+                  <View style={styles.headerAvatarPlaceholder}>
+                    <Ionicons name="person" size={18} color="#fff" />
+                  </View>
+                )}
+                {profileName ? (
+                  <Text style={styles.headerAvatarName} numberOfLines={1}>
+                    {profileName.split(" ")[0]}
+                  </Text>
+                ) : null}
+              </Pressable>
             </View>
-            <Text style={styles.greeting}>Merhaba, sağlıklı günler! 🌿</Text>
+            <Text style={styles.greeting}>
+              Merhaba{profileName ? `, ${profileName.split(" ")[0]}` : ", sağlıklı günler"}! 🌿
+            </Text>
             <Text style={styles.subGreeting}>
               Sağlığınız için güvenilir bilgi ve hatırlatmalar
             </Text>
@@ -346,6 +389,34 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#FFFFFF",
     letterSpacing: 0.5,
+  },
+  headerAvatarBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  headerAvatarImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.8)",
+  },
+  headerAvatarPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.25)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.8)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerAvatarName: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+    maxWidth: 80,
   },
   greeting: {
     fontSize: 26,

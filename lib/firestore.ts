@@ -20,6 +20,22 @@ export const COLLECTION_RECIPES = "recipes";
 export const COLLECTION_USERS = "users";
 export const SUBCOLLECTION_FAVORITES = "favorites";
 
+async function uriToBase64(uri: string): Promise<string> {
+  if (!uri || uri.startsWith("http") || uri.startsWith("data:")) return uri;
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return uri;
+  }
+}
+
 export async function addFavoriteRecipeFirestore(
   userId: string,
   recipeId: string
@@ -155,6 +171,9 @@ export type CreateRecipeInput = {
   /** Tarif videosu URI */
   videoUri?: string;
   createdBy: string;
+  prepMinutes?: number;
+  cookMinutes?: number;
+  servings?: number;
 };
 
 function buildRecipeBody(input: {
@@ -210,6 +229,14 @@ export async function createRecipe(input: CreateRecipeInput): Promise<string> {
     imageUris,
   });
 
+  // Local URI'leri base64'e çevir
+  const convertedImageUri = body.imageUri
+    ? await uriToBase64(body.imageUri)
+    : "";
+  const convertedImageUrls = await Promise.all(
+    body.imageUrls.map((u) => uriToBase64(u))
+  );
+
   const ref = await addDoc(collection(db, COLLECTION_RECIPES), {
     title: input.title,
     author: input.authorLabel ?? "Health Guide Kullanıcı",
@@ -220,9 +247,11 @@ export async function createRecipe(input: CreateRecipeInput): Promise<string> {
     fullText: body.fullText,
     ingredients: body.ingredients,
     steps: body.steps,
-    prepMinutes: 0,
-    imageUrls: body.imageUrls,
-    imageUri: body.imageUri,
+    prepMinutes: input.prepMinutes ?? 0,
+    cookMinutes: 0,
+    servings: 0,
+    imageUri: convertedImageUri,
+    imageUrls: convertedImageUrls,
     videoUri: input.videoUri?.trim() ?? "",
     createdBy: input.createdBy,
     createdAt: serverTimestamp(),
@@ -261,6 +290,13 @@ export async function updateRecipe(
     imageUris,
   });
 
+  const convertedImageUri = body.imageUri
+    ? await uriToBase64(body.imageUri)
+    : "";
+  const convertedImageUrls = await Promise.all(
+    body.imageUrls.map((u) => uriToBase64(u))
+  );
+
   await updateDoc(doc(db, COLLECTION_RECIPES, recipeId), {
     title: input.title,
     tags: input.tags,
@@ -268,8 +304,8 @@ export async function updateRecipe(
     fullText: body.fullText,
     ingredients: body.ingredients,
     steps: body.steps,
-    imageUrls: body.imageUrls,
-    imageUri: body.imageUri,
+    imageUri: convertedImageUri,
+    imageUrls: convertedImageUrls,
     videoUri: input.videoUri?.trim() ?? "",
     updatedAt: serverTimestamp(),
   });
