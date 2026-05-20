@@ -14,12 +14,15 @@ function isHealthProfilePath(pathname: string): boolean {
   return pathname === "/health-profile" || pathname.startsWith("/health-profile/");
 }
 
+function isOnboardingPath(pathname: string): boolean {
+  return pathname === "/onboarding";
+}
+
 export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<User | null | "loading">("loading");
-  /** null = henüz çözülmedi; yönlendirme bu bitene kadar bekler */
-  const [onboardingResolved, setOnboardingResolved] = useState<boolean | null>(null);
+  const [bootstrapReady, setBootstrapReady] = useState(false);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(() => {
@@ -31,7 +34,7 @@ export default function RootLayout() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
-      setOnboardingResolved(null);
+      setBootstrapReady(false);
       if (firebaseUser?.uid) {
         console.log("[RootLayout] migrateLocalRemindersToFirestore çağrılıyor, uid:", firebaseUser.uid);
         void migrateLocalRemindersToFirestore(firebaseUser.uid).catch((e) =>
@@ -44,55 +47,40 @@ export default function RootLayout() {
     return unsubscribe;
   }, []);
 
+  /**
+   * Tek bootstrap: her auth / rota değişiminde Firestore'dan taze onboarding durumu okunur.
+   * Kayıt sonrası onboardingCompleted:false → /onboarding (/(tabs) değil).
+   */
   useEffect(() => {
-    if (user === "loading") return;
+    if (user === "loading") {
+      setBootstrapReady(false);
+      return;
+    }
 
     let cancelled = false;
+    setBootstrapReady(false);
 
     void (async () => {
       try {
-        const done = await resolveOnboardingCompleted(user?.uid ?? null);
-        if (!cancelled) {
-          if (__DEV__) {
-            console.log("[RootLayout] onboardingResolved:", done);
-            console.log("[RootLayout] user:", user?.uid ?? "null");
-          }
-          setOnboardingResolved(done);
+        const onboardingDone = await resolveOnboardingCompleted(user?.uid ?? null);
+
+        if (cancelled) return;
+
+        if (__DEV__) {
+          console.log("[RootLayout] onboardingDone:", onboardingDone, "uid:", user?.uid ?? "null", "path:", pathname);
         }
-      } catch (e) {
-        console.warn("[RootLayout] onboarding resolve hatası:", e);
-        if (!cancelled) {
-          setOnboardingResolved(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (user === "loading" || onboardingResolved === null) return;
-
-    let cancelled = false;
-
-    const route = async () => {
-      try {
-        const onboardingDone = onboardingResolved;
-        const onEntryPath =
-          pathname === "/" ||
-          pathname === "/index" ||
-          pathname === "/onboarding" ||
-          pathname === "/auth";
 
         if (!onboardingDone) {
-          if (pathname !== "/onboarding") router.replace("/onboarding");
+          if (!isOnboardingPath(pathname)) {
+            router.replace("/onboarding");
+          }
           return;
         }
 
         if (!user) {
-          if (pathname !== "/auth") router.replace("/auth" as Href);
+          if (pathname !== "/auth") {
+            router.replace("/auth" as Href);
+          }
           return;
         }
 
@@ -108,21 +96,33 @@ export default function RootLayout() {
           return;
         }
 
+        const onEntryPath =
+          pathname === "/" ||
+          pathname === "/index" ||
+          isOnboardingPath(pathname) ||
+          pathname === "/auth";
+
         if (onEntryPath || pathname === "/auth") {
           router.replace("/(tabs)" as Href);
         }
       } catch (e) {
-        console.warn("[RootLayout] yönlendirme hatası:", e);
+        console.warn("[RootLayout] bootstrap hatası:", e);
+        if (!cancelled && !isOnboardingPath(pathname)) {
+          router.replace("/onboarding");
+        }
+      } finally {
+        if (!cancelled) {
+          setBootstrapReady(true);
+        }
       }
-    };
+    })();
 
-    void route();
     return () => {
       cancelled = true;
     };
-  }, [user, onboardingResolved, pathname, router]);
+  }, [user, pathname, router]);
 
-  const gateLoading = user === "loading" || onboardingResolved === null;
+  const gateLoading = user === "loading" || !bootstrapReady;
 
   return (
     <>

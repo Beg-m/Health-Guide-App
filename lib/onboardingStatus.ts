@@ -1,11 +1,24 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { STORAGE_ONBOARDING_COMPLETED } from "@/constants/onboardingStorage";
+import {
+  STORAGE_ONBOARDING_COMPLETED,
+  STORAGE_ONBOARDING_UID,
+} from "@/constants/onboardingStorage";
 import { db } from "@/lib/firebase";
+
+export async function clearLocalOnboardingFlags(): Promise<void> {
+  await AsyncStorage.multiRemove([
+    STORAGE_ONBOARDING_COMPLETED,
+    STORAGE_ONBOARDING_UID,
+  ]);
+}
 
 /** Yerel + (varsa) Firestore: onboarding tamamlandı işareti */
 export async function markOnboardingCompleted(uid?: string | null): Promise<void> {
   await AsyncStorage.setItem(STORAGE_ONBOARDING_COMPLETED, "true");
+  if (uid) {
+    await AsyncStorage.setItem(STORAGE_ONBOARDING_UID, uid);
+  }
   if (!uid) return;
   try {
     await setDoc(
@@ -21,25 +34,19 @@ export async function markOnboardingCompleted(uid?: string | null): Promise<void
   }
 }
 
-/**
- * Onboarding tamamlanmış mı?
- * - Önce AsyncStorage (hızlı, giriş öncesi akış)
- * - Girişliyse Firestore; true ise yerel depoyu senkronlar
- * - Firestore okunamazsa yerel "true" korunur; yerel false ise false (yanlışlıkla onboarding'e atmamak için true varsaymayız)
- */
-export async function isOnboardingCompletedLocally(): Promise<boolean> {
+export async function isOnboardingCompletedLocally(
+  uid?: string | null
+): Promise<boolean> {
   const localRaw = await AsyncStorage.getItem(STORAGE_ONBOARDING_COMPLETED);
-  return localRaw === "true";
+  if (localRaw !== "true") return false;
+  if (!uid) return true;
+  const localUid = await AsyncStorage.getItem(STORAGE_ONBOARDING_UID);
+  return localUid === uid;
 }
 
-/** Giriş/kayıt sonrası: yerel tamamlanmadıysa Firestore'da false tutulur */
-export async function syncOnboardingAfterAuth(uid: string): Promise<void> {
-  const localDone = await isOnboardingCompletedLocally();
-  if (localDone) {
-    await markOnboardingCompleted(uid);
-    return;
-  }
-  await AsyncStorage.removeItem(STORAGE_ONBOARDING_COMPLETED);
+/** Yeni kayıt: önceki cihaz/hesap onboarding bayrağını sıfırla */
+export async function resetOnboardingForNewAccount(uid: string): Promise<void> {
+  await clearLocalOnboardingFlags();
   try {
     await setDoc(
       doc(db, "users", uid),
@@ -50,28 +57,55 @@ export async function syncOnboardingAfterAuth(uid: string): Promise<void> {
       { merge: true }
     );
   } catch (e) {
-    console.warn("[onboardingStatus] Firestore onboarding false yazılamadı:", e);
+    console.warn("[onboardingStatus] Yeni hesap onboarding sıfırlama hatası:", e);
   }
 }
 
-export async function resolveOnboardingCompleted(
-  uid?: string | null
-): Promise<boolean> {
-  const localRaw = await AsyncStorage.getItem(STORAGE_ONBOARDING_COMPLETED);
-  const localDone = localRaw === "true";
-  if (localDone) return true;
-
-  if (!uid) return false;
-
+/** Giriş sonrası: yerel + Firestore senkronu (kayıt değil) */
+export async function syncOnboardingAfterLogin(uid: string): Promise<void> {
+  const localDone = await isOnboardingCompletedLocally(uid);
+  if (localDone) {
+    await markOnboardingCompleted(uid);
+    return;
+  }
   try {
     const snap = await getDoc(doc(db, "users", uid));
     if (snap.exists() && snap.data()?.onboardingCompleted === true) {
-      await AsyncStorage.setItem(STORAGE_ONBOARDING_COMPLETED, "true");
-      return true;
+      await markOnboardingCompleted(uid);
     }
-    return false;
   } catch (e) {
-    console.warn("[onboardingStatus] Firestore okuma hatası, yerel değer kullanılıyor:", e);
-    return localDone;
+    console.warn("[onboardingStatus] Giriş sonrası onboarding sync hatası:", e);
   }
+}
+
+/**
+ * Onboarding tamamlandı mı?
+ * - Girişliyse: Firestore `users/{uid}.onboardingCompleted === true` (eksik/false → tamamlanmamış)
+ * - Giriş yoksa: yerel bayrak (onboarding → auth akışı)
+ */
+export async function resolveOnboardingCompleted(
+  uid?: string | null
+): Promise<boolean> {
+  if (uid) {
+    try {
+      const snap = await getDoc(doc(db, "users", uid));
+      if (!snap.exists()) {
+        await clearLocalOnboardingFlags();
+        return false;
+      }
+
+      const completed = snap.data()?.onboardingCompleted === true;
+      if (completed) {
+        await markOnboardingCompleted(uid);
+      } else {
+        await clearLocalOnboardingFlags();
+      }
+      return completed;
+    } catch (e) {
+      console.warn("[onboardingStatus] Firestore okuma hatası:", e);
+      return false;
+    }
+  }
+
+  return (await AsyncStorage.getItem(STORAGE_ONBOARDING_COMPLETED)) === "true";
 }

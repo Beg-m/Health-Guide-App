@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useRouter, type Href } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -19,10 +20,14 @@ import {
   loadHealthProfile,
   persistHealthProfile,
 } from "@/lib/healthProfileStorage";
-import { syncOnboardingAfterAuth } from "@/lib/onboardingStatus";
+import {
+  resetOnboardingForNewAccount,
+  syncOnboardingAfterLogin,
+} from "@/lib/onboardingStatus";
 import { sendPasswordResetEmail, signInAnonymously } from "firebase/auth";
 
 export default function AuthScreen() {
+  const router = useRouter();
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,13 +35,8 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
 
   const syncProfileToFirestore = async (uid: string) => {
-    try {
-      const healthProfile = await loadHealthProfile();
-      await persistHealthProfile(healthProfile, uid);
-      await syncOnboardingAfterAuth(uid);
-    } catch (e) {
-      console.warn("Firestore profil sync hatası:", e);
-    }
+    const healthProfile = await loadHealthProfile();
+    await persistHealthProfile(healthProfile, uid);
   };
 
   const onSubmit = async () => {
@@ -53,10 +53,16 @@ export default function AuthScreen() {
     try {
       if (isRegister) {
         await registerUser(email.trim(), password, displayName.trim());
+        const newUid = auth.currentUser!.uid;
+        await syncProfileToFirestore(newUid);
+        await resetOnboardingForNewAccount(newUid);
+        router.replace("/onboarding" as Href);
       } else {
         await loginUser(email.trim(), password);
+        const loginUid = auth.currentUser!.uid;
+        await syncProfileToFirestore(loginUid);
+        await syncOnboardingAfterLogin(loginUid);
       }
-      await syncProfileToFirestore(auth.currentUser!.uid);
     } catch (err: any) {
       const msg = firebaseErrorMessage(err.code);
       Alert.alert("Hata", msg);
@@ -88,7 +94,10 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       await signInAnonymously(auth);
-      await syncProfileToFirestore(auth.currentUser!.uid);
+      const guestUid = auth.currentUser!.uid;
+      await syncProfileToFirestore(guestUid);
+      await resetOnboardingForNewAccount(guestUid);
+      router.replace("/onboarding" as Href);
     } catch {
       Alert.alert("Hata", "Misafir girişi başarısız.");
     } finally {

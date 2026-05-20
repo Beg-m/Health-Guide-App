@@ -13,6 +13,7 @@ import {
     persistHealthProfile,
     type HealthProfilePreferences,
   } from "./healthProfileStorage";
+  import { clearLocalOnboardingFlags } from "./onboardingStatus";
   
   // Kayıt ol
   export async function registerUser(email: string, password: string, displayName: string) {
@@ -43,6 +44,7 @@ import {
   // Çıkış yap
   export async function logoutUser() {
     await signOut(auth);
+    await clearLocalOnboardingFlags();
   }
   
   // Firestore'dan profil çek
