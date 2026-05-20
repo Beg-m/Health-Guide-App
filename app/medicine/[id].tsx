@@ -81,9 +81,7 @@ export default function MedicineDetailScreen() {
         <Text style={styles.topTitle} numberOfLines={1}>
           İlaç detayı
         </Text>
-        <View style={styles.topRight}>
-          <Ionicons name="barcode-outline" size={26} color={Colors.primary} />
-        </View>
+        <View style={styles.topBarSpacer} />
       </View>
 
       <ScrollView
@@ -198,10 +196,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: Colors.text,
   },
-  topRight: {
+  topBarSpacer: {
     width: 44,
-    alignItems: "flex-end",
-    paddingRight: 8,
   },
   scrollContent: {
     paddingHorizontal: ScreenPadding,
