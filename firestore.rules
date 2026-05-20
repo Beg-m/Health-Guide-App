@@ -85,6 +85,24 @@ service cloud.firestore {
         && resource.data.createdBy == request.auth.uid;
     }
 
+    match /stories/{storyId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.mediaURL is string
+        && request.resource.data.mediaType in ["photo", "video"]
+        && request.resource.data.createdAt is string
+        && request.resource.data.expiresAt is string;
+      allow delete: if isSignedIn() && (
+        resource.data.uid == request.auth.uid
+        || (
+          resource.data.keys().hasAny(["expiresAtMs"])
+          && resource.data.expiresAtMs is number
+          && resource.data.expiresAtMs <= request.time.toMillis()
+        )
+      );
+    }
+
     match /familyGroups/{groupId} {
       // inviteCode ile sorgu (joinFamilyGroup) için giriş yapmış kullanıcılar okuyabilir
       allow read: if isSignedIn();

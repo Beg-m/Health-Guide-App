@@ -6,44 +6,64 @@ import {
   Switch,
   Platform,
   Pressable,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
+import { useState, useCallback } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, ScreenPadding } from "@/constants/theme";
 import { useHealthProfile } from "@/hooks/useHealthProfile";
-import type { HealthProfilePreferences } from "@/lib/healthProfileStorage";
+import {
+  HEALTH_PROFILE_OPTIONS,
+  persistHealthProfile,
+} from "@/lib/healthProfileStorage";
+import { auth } from "@/lib/firebase";
 
 type Ion = keyof typeof Ionicons.glyphMap;
 
-const PROFILE_OPTIONS: {
-  key: keyof HealthProfilePreferences;
-  label: string;
-  icon: Ion;
-}[] = [
-  { key: "generalUser", label: "Genel Kullanıcı", icon: "checkmark-circle-outline" },
-  { key: "celiac", label: "Çölyak (Gluten-free)", icon: "nutrition-outline" },
-  { key: "lactose", label: "Laktoz İntoleransı", icon: "water-outline" },
-  { key: "diabetes", label: "Diyabet", icon: "pulse-outline" },
-  { key: "vegan", label: "Vegan", icon: "leaf-outline" },
-  { key: "vegetarian", label: "Vejetaryen", icon: "restaurant-outline" },
-  { key: "athlete", label: "Sporcu / Aktif yaşam", icon: "fitness-outline" },
-  { key: "pregnantBreastfeeding", label: "Hamile / Emziren", icon: "heart-outline" },
-  { key: "senior65", label: "65 yaş üstü", icon: "accessibility-outline" },
-  { key: "child012", label: "Çocuk için (0-12 yaş)", icon: "happy-outline" },
-  { key: "chronicMeds", label: "Kronik ilaç kullanıcısı", icon: "medical-outline" },
-];
-
 export default function HealthProfileScreen() {
   const router = useRouter();
-  const { prefs, setPreference } = useHealthProfile();
+  const { required } = useLocalSearchParams<{ required?: string }>();
+  const isRequired = required === "1";
+  const { prefs, setPreference, ready, reload } = useHealthProfile();
+  const [saving, setSaving] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      void reload();
+    }, [reload])
+  );
+
+  const onComplete = async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      Alert.alert("Hata", "Oturum bulunamadı. Lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await persistHealthProfile(prefs, uid);
+      router.replace("/(tabs)");
+    } catch {
+      Alert.alert("Hata", "Sağlık profili kaydedilemedi. Tekrar deneyin.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
-          <Ionicons name="arrow-back" size={24} color={Colors.text} />
-        </Pressable>
+        {!isRequired ? (
+          <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={Colors.text} />
+          </Pressable>
+        ) : (
+          <View style={styles.backBtn} />
+        )}
         <Text style={styles.topTitle} numberOfLines={1}>
           Sağlık profili
         </Text>
@@ -55,29 +75,58 @@ export default function HealthProfileScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {isRequired && (
+          <View style={styles.requiredBanner}>
+            <Ionicons name="information-circle-outline" size={20} color={Colors.primary} />
+            <Text style={styles.requiredBannerText}>
+              Devam etmek için sağlık profilinizi doldurun.
+            </Text>
+          </View>
+        )}
+
         <Text style={styles.intro}>
           &quot;Genel Kullanıcı&quot; seçildiğinde diğer seçenekler kapanır. Birden fazla özel
-          profili (ör. Diyabet + Vegan) birlikte seçebilirsiniz. Tercihler cihazınızda saklanır.
+          profili (ör. Diyabet + Vegan) birlikte seçebilirsiniz.
         </Text>
 
-        {PROFILE_OPTIONS.map((item) => (
-          <View key={item.key} style={styles.row}>
-            <View style={styles.iconWrap}>
-              <Ionicons name={item.icon} size={22} color={Colors.primary} />
+        {!ready ? (
+          <ActivityIndicator color={Colors.primary} style={{ marginTop: 24 }} />
+        ) : (
+          HEALTH_PROFILE_OPTIONS.map((item) => (
+            <View key={item.key} style={styles.row}>
+              <View style={styles.iconWrap}>
+                <Ionicons name={item.icon as Ion} size={22} color={Colors.primary} />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>{item.label}</Text>
+              </View>
+              <Switch
+                value={prefs[item.key]}
+                onValueChange={(v) => setPreference(item.key, v)}
+                trackColor={{ false: Colors.border, true: Colors.primary }}
+                thumbColor={Platform.OS === "android" ? "#FFFFFF" : undefined}
+                ios_backgroundColor={Colors.border}
+              />
             </View>
-            <View style={styles.rowText}>
-              <Text style={styles.rowLabel}>{item.label}</Text>
-            </View>
-            <Switch
-              value={prefs[item.key]}
-              onValueChange={(v) => setPreference(item.key, v)}
-              trackColor={{ false: Colors.border, true: Colors.primary }}
-              thumbColor={Platform.OS === "android" ? "#FFFFFF" : undefined}
-              ios_backgroundColor={Colors.border}
-            />
-          </View>
-        ))}
+          ))
+        )}
       </ScrollView>
+
+      {isRequired && (
+        <View style={styles.footer}>
+          <Pressable
+            style={[styles.completeBtn, (saving || !ready) && { opacity: 0.7 }]}
+            onPress={() => void onComplete()}
+            disabled={saving || !ready}
+          >
+            {saving ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.completeBtnText}>Kaydet ve Devam Et</Text>
+            )}
+          </Pressable>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -112,6 +161,23 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
     paddingTop: 8,
   },
+  requiredBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: `${Colors.primary}12`,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: `${Colors.primary}30`,
+  },
+  requiredBannerText: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.text,
+    lineHeight: 20,
+  },
   intro: {
     fontSize: 14,
     color: Colors.textSecondary,
@@ -145,5 +211,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     color: Colors.text,
+  },
+  footer: {
+    paddingHorizontal: ScreenPadding,
+    paddingBottom: Platform.OS === "ios" ? 24 : 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  completeBtn: {
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completeBtnText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

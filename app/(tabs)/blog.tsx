@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Image,
   Alert,
+  TextInput,
+  ToastAndroid,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -26,11 +28,13 @@ import {
   getRecipeTagStyle,
   headerTitleStyle,
 } from "@/constants/theme";
-import { SAMPLE_STORY_REELS } from "@/constants/blogStories";
 import type { RecipePost } from "@/constants/recipesBlog";
 import { displayImageUri } from "@/lib/displayImageUri";
 import { PremiumRequiredModal } from "@/components/PremiumRequiredModal";
-import { BlogStoryReelsStrip } from "@/components/BlogStoryReels";
+import {
+  BlogStoryReelsStrip,
+  type StoryStripPlaceholder,
+} from "@/components/BlogStoryReels";
 import { FadeInView } from "@/components/FadeInView";
 import { PressableScale } from "@/components/PressableScale";
 import { auth, db } from "@/lib/firebase";
@@ -46,9 +50,65 @@ import {
   readFavoriteIdsFromStorage,
   writeFavoriteIdsToStorage,
 } from "@/lib/favoriteRecipes";
+import { setPendingStoryDraft } from "@/lib/pendingStoryDraft";
+import {
+  deleteExpiredStories,
+  subscribeActiveStoryGroups,
+  type StoryMediaType,
+  type StoryUserGroup,
+} from "@/lib/storiesStorage";
 import { Video, ResizeMode } from "expo-av";
 
 const BLOG_GREEN = "#16a34a";
+
+const BLOG_TAG_FILTERS = [
+  "Tümü",
+  "Vegan",
+  "Vejetaryen",
+  "Glutensiz",
+  "Çölyak",
+  "Diyabet",
+  "Laktoz İntoleransı",
+  "Sporcu",
+  "Hamile/Emziren",
+  "65 yaş üstü",
+  "Çocuk",
+] as const;
+
+/** Tarif etiketleri ile chip etiketlerini eşleştirir */
+const TAG_FILTER_ALIASES: Record<string, string[]> = {
+  Vegan: ["Vegan"],
+  Vejetaryen: ["Vejetaryen"],
+  Glutensiz: ["Glutensiz", "Glütensiz"],
+  Çölyak: ["Çölyak"],
+  Diyabet: ["Diyabet"],
+  "Laktoz İntoleransı": ["Laktoz İntoleransı", "Laktozsuz"],
+  Sporcu: ["Sporcu", "Sporcu / Aktif yaşam"],
+  "Hamile/Emziren": ["Hamile/Emziren", "Hamile / Emziren"],
+  "65 yaş üstü": ["65 yaş üstü"],
+  Çocuk: ["Çocuk", "Çocuk için (0-12 yaş)"],
+};
+
+const STORY_STRIP_PLACEHOLDERS: StoryStripPlaceholder[] = [
+  { id: "demo-selin", displayName: "Selin Y.", avatarColor: "#0d9488" },
+  { id: "demo-emre", displayName: "Emre K.", avatarColor: "#2563eb" },
+  { id: "demo-ayse", displayName: "Ayşe D.", avatarColor: "#9333ea" },
+  { id: "demo-saglik", displayName: "Sağlık", avatarColor: "#16a34a" },
+];
+
+function showNoStoryToast(): void {
+  if (Platform.OS === "android") {
+    ToastAndroid.show("Henüz hikaye yok", ToastAndroid.SHORT);
+  } else {
+    Alert.alert("Henüz hikaye yok");
+  }
+}
+
+function recipeMatchesTagFilter(recipe: RecipePost, filter: string): boolean {
+  const aliases = TAG_FILTER_ALIASES[filter] ?? [filter];
+  const normalized = new Set(aliases.map((a) => a.trim().toLowerCase()));
+  return recipe.tags.some((tag) => normalized.has(tag.trim().toLowerCase()));
+}
 
 const IS_PREMIUM_USER = true;
 
@@ -64,8 +124,11 @@ export default function BlogScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<string[]>([]);
   const [feedFilter, setFeedFilter] = useState<BlogFeedFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
+  const [storyGroups, setStoryGroups] = useState<StoryUserGroup[]>([]);
 
-  const storyFeed = useMemo(() => SAMPLE_STORY_REELS, []);
+  const currentUserId = auth.currentUser?.uid ?? null;
 
   const favoriteIdSet = useMemo(
     () => new Set(favoriteRecipeIds),
@@ -73,16 +136,45 @@ export default function BlogScreen() {
   );
 
   const displayedRecipes = useMemo(() => {
-    if (feedFilter === "favorites") {
-      return recipes.filter((r) => favoriteIdSet.has(r.id));
+    let list =
+      feedFilter === "favorites"
+        ? recipes.filter((r) => favoriteIdSet.has(r.id))
+        : recipes;
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) => r.title.toLowerCase().includes(q));
     }
-    return recipes;
-  }, [recipes, feedFilter, favoriteIdSet]);
+    if (selectedFilters.length > 0) {
+      list = list.filter((r) =>
+        selectedFilters.every((filter) => recipeMatchesTagFilter(r, filter))
+      );
+    }
+    return list;
+  }, [recipes, feedFilter, favoriteIdSet, searchQuery, selectedFilters]);
+
+  const toggleTagFilter = useCallback((label: string) => {
+    if (label === "Tümü") {
+      setSelectedFilters([]);
+      return;
+    }
+    setSelectedFilters((prev) => {
+      if (prev.includes(label)) {
+        return prev.filter((f) => f !== label);
+      }
+      return [...prev, label];
+    });
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       void (async () => {
+        try {
+          await deleteExpiredStories();
+        } catch (e) {
+          console.warn("[Blog] Süresi dolmuş hikaye silme hatası:", e);
+        }
+
         const firebaseUser = auth.currentUser;
         if (!firebaseUser) return;
         const userId = firebaseUser.uid;
@@ -111,6 +203,14 @@ export default function BlogScreen() {
       return () => { cancelled = true; };
     }, [])
   );
+
+  useEffect(() => {
+    const unsub = subscribeActiveStoryGroups(
+      (groups) => setStoryGroups(groups),
+      (err) => console.warn("[Blog] Hikaye dinleme hatası:", err)
+    );
+    return unsub;
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -214,7 +314,33 @@ export default function BlogScreen() {
     });
   }, []);
 
-  const handleCameraPress = useCallback(() => {
+  const pickStoryMedia = useCallback(
+    (launch: () => Promise<ImagePicker.ImagePickerResult>, mediaType: StoryMediaType) => {
+      void (async () => {
+        const firebaseUser = auth.currentUser;
+        if (!firebaseUser) {
+          Alert.alert("Giriş gerekli", "Hikaye paylaşmak için giriş yapmalısınız.");
+          return;
+        }
+        const result = await launch();
+        if (!result.canceled && result.assets[0]?.uri) {
+          const asset = result.assets[0];
+          setPendingStoryDraft({
+            uri: asset.uri,
+            mediaType,
+            mimeType: asset.mimeType ?? undefined,
+          });
+          router.push({
+            pathname: "/story/new",
+            params: { mediaType },
+          });
+        }
+      })();
+    },
+    [router]
+  );
+
+  const handleAddStoryPress = useCallback(() => {
     if (Platform.OS === "web") {
       Alert.alert(
         "Bilgi",
@@ -223,7 +349,7 @@ export default function BlogScreen() {
       return;
     }
 
-    Alert.alert("İçerik Ekle", "Nasıl eklemek istersiniz?", [
+    Alert.alert("Hikaye Ekle", "Fotoğraf veya video seçin", [
       {
         text: "📸 Kamera - Fotoğraf",
         onPress: () => {
@@ -233,20 +359,15 @@ export default function BlogScreen() {
               Alert.alert("İzin Gerekli", "Kamera izni gerekiyor.");
               return;
             }
-            const result = await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              quality: 0.8,
-            });
-            if (!result.canceled && result.assets[0]) {
-              router.push({
-                pathname: "/blog-post/new",
-                params: {
-                  prefilledMedia: result.assets[0].uri,
-                  mediaType: "image",
-                },
-              });
-            }
+            pickStoryMedia(
+              () =>
+                ImagePicker.launchCameraAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  allowsEditing: true,
+                  quality: 0.85,
+                }),
+              "photo"
+            );
           })();
         },
       },
@@ -259,64 +380,45 @@ export default function BlogScreen() {
               Alert.alert("İzin Gerekli", "Kamera izni gerekiyor.");
               return;
             }
-            const result = await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-              videoMaxDuration: 60,
-            });
-            if (!result.canceled && result.assets[0]) {
-              router.push({
-                pathname: "/blog-post/new",
-                params: {
-                  prefilledMedia: result.assets[0].uri,
-                  mediaType: "video",
-                },
-              });
-            }
+            pickStoryMedia(
+              () =>
+                ImagePicker.launchCameraAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+                  videoMaxDuration: 30,
+                }),
+              "video"
+            );
           })();
         },
       },
       {
         text: "🖼️ Galeri - Fotoğraf",
         onPress: () => {
-          void (async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              quality: 0.8,
-            });
-            if (!result.canceled && result.assets[0]) {
-              router.push({
-                pathname: "/blog-post/new",
-                params: {
-                  prefilledMedia: result.assets[0].uri,
-                  mediaType: "image",
-                },
-              });
-            }
-          })();
+          pickStoryMedia(
+            () =>
+              ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                quality: 0.85,
+              }),
+            "photo"
+          );
         },
       },
       {
         text: "🎥 Galeri - Video",
         onPress: () => {
-          void (async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-            });
-            if (!result.canceled && result.assets[0]) {
-              router.push({
-                pathname: "/blog-post/new",
-                params: {
-                  prefilledMedia: result.assets[0].uri,
-                  mediaType: "video",
-                },
-              });
-            }
-          })();
+          pickStoryMedia(
+            () =>
+              ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+              }),
+            "video"
+          );
         },
       },
       { text: "İptal", style: "cancel" },
     ]);
-  }, [router]);
+  }, [pickStoryMedia]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -326,10 +428,64 @@ export default function BlogScreen() {
           showsVerticalScrollIndicator={false}
         >
           <BlogStoryReelsStrip
-            stories={storyFeed}
-            onCameraPress={handleCameraPress}
-            onAddStoryPress={handleCameraPress}
+            groups={storyGroups}
+            placeholders={STORY_STRIP_PLACEHOLDERS}
+            onPlaceholderPress={showNoStoryToast}
+            currentUserId={currentUserId}
+            onAddStoryPress={handleAddStoryPress}
           />
+
+          <View style={styles.searchRow}>
+            <Ionicons name="search" size={20} color={BLOG_GREEN} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Tarif ara…"
+              placeholderTextColor={Colors.textSecondary}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="search"
+            />
+            {searchQuery.length > 0 ? (
+              <Pressable
+                onPress={() => setSearchQuery("")}
+                hitSlop={10}
+                accessibilityLabel="Aramayı temizle"
+              >
+                <Ionicons name="close-circle" size={22} color={Colors.textSecondary} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.tagChipsScroll}
+          >
+            {BLOG_TAG_FILTERS.map((label) => {
+              const isAll = label === "Tümü";
+              const selected = isAll
+                ? selectedFilters.length === 0
+                : selectedFilters.includes(label);
+              return (
+                <Pressable
+                  key={label}
+                  onPress={() => toggleTagFilter(label)}
+                  style={[styles.tagChip, selected && styles.tagChipSelected]}
+                >
+                  <Text
+                    style={[
+                      styles.tagChipText,
+                      selected && styles.tagChipTextSelected,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
 
           <View style={styles.header}>
             <View
@@ -418,6 +574,18 @@ export default function BlogScreen() {
               <Text style={styles.emptyTitle}>Henüz favori tarif yok</Text>
               <Text style={styles.hintMuted}>
                 Tarif kartındaki yer imi simgesine dokunarak favorilerinize ekleyin.
+              </Text>
+            </View>
+          ) : displayedRecipes.length === 0 &&
+            (searchQuery.trim().length > 0 || selectedFilters.length > 0) ? (
+            <View style={styles.centerBox}>
+              <Text style={styles.emptyTitle}>Sonuç bulunamadı</Text>
+              <Text style={styles.hintMuted}>
+                {searchQuery.trim() && selectedFilters.length > 0
+                  ? `«${searchQuery.trim()}» ve ${selectedFilters.map((f) => `«${f}»`).join(" + ")} için eşleşen tarif yok.`
+                  : searchQuery.trim()
+                    ? `«${searchQuery.trim()}» başlığında eşleşen tarif yok.`
+                    : `${selectedFilters.map((f) => `«${f}»`).join(" + ")} etiketlerinin hepsine uyan tarif yok.`}
               </Text>
             </View>
           ) : (
@@ -775,6 +943,48 @@ const styles = StyleSheet.create({
   },
   feedFilterPillTextActive: {
     color: BLOG_GREEN,
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1.5,
+    borderColor: BLOG_GREEN,
+    borderRadius: Radii.md,
+    backgroundColor: Colors.card,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 6,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: Colors.text,
+    paddingVertical: Platform.OS === "ios" ? 4 : 2,
+  },
+  tagChipsScroll: {
+    gap: 8,
+    paddingVertical: 2,
+    paddingRight: 4,
+  },
+  tagChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radii.pill,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1.5,
+    borderColor: BLOG_GREEN,
+  },
+  tagChipSelected: {
+    backgroundColor: BLOG_GREEN,
+    borderColor: BLOG_GREEN,
+  },
+  tagChipText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: BLOG_GREEN,
+  },
+  tagChipTextSelected: {
+    color: "#FFFFFF",
   },
   scrollContent: {
     paddingHorizontal: ScreenPadding,

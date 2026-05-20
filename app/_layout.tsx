@@ -1,30 +1,37 @@
 import { useEffect, useState } from "react";
+import { ActivityIndicator, View, StyleSheet } from "react-native";
 import { Stack, usePathname, useRouter, type Href } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import * as Notifications from "expo-notifications";
 import { auth } from "@/lib/firebase";
 import { migrateLocalRemindersToFirestore } from "@/lib/reminderStorage";
+import { getUserProfile } from "@/lib/authStorage";
+import { isHealthProfileIncomplete } from "@/lib/healthProfileStorage";
+import { resolveOnboardingCompleted } from "@/lib/onboardingStatus";
 
-const KEY_ONBOARDING_COMPLETED = "onboardingCompleted";
+function isHealthProfilePath(pathname: string): boolean {
+  return pathname === "/health-profile" || pathname.startsWith("/health-profile/");
+}
 
 export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<User | null | "loading">("loading");
+  /** null = henüz çözülmedi; yönlendirme bu bitene kadar bekler */
+  const [onboardingResolved, setOnboardingResolved] = useState<boolean | null>(null);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(() => {
       router.push("/(tabs)/reminders" as any);
     });
     return () => sub.remove();
-  }, []);
+  }, [router]);
 
-  // Firebase Auth state'ini dinle
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser); // null = çıkış yapılmış, User = giriş yapılmış
+      setUser(firebaseUser);
+      setOnboardingResolved(null);
       if (firebaseUser?.uid) {
         console.log("[RootLayout] migrateLocalRemindersToFirestore çağrılıyor, uid:", firebaseUser.uid);
         void migrateLocalRemindersToFirestore(firebaseUser.uid).catch((e) =>
@@ -37,59 +44,95 @@ export default function RootLayout() {
     return unsubscribe;
   }, []);
 
-  // Yönlendirme
   useEffect(() => {
-    if (user === "loading") return; // Auth henüz başlamadı, bekle
+    if (user === "loading") return;
 
     let cancelled = false;
 
-    const bootstrap = async () => {
+    void (async () => {
       try {
-        const onboardingCompleted = await AsyncStorage.getItem(KEY_ONBOARDING_COMPLETED);
-
-        if (__DEV__) {
-          console.log("[RootLayout] onboardingCompleted:", onboardingCompleted);
-          console.log("[RootLayout] user:", user?.uid ?? "null");
+        const done = await resolveOnboardingCompleted(user?.uid ?? null);
+        if (!cancelled) {
+          if (__DEV__) {
+            console.log("[RootLayout] onboardingResolved:", done);
+            console.log("[RootLayout] user:", user?.uid ?? "null");
+          }
+          setOnboardingResolved(done);
         }
+      } catch (e) {
+        console.warn("[RootLayout] onboarding resolve hatası:", e);
+        if (!cancelled) {
+          setOnboardingResolved(false);
+        }
+      }
+    })();
 
-        if (cancelled) return;
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
-        const onboardingDone = onboardingCompleted === "true";
+  useEffect(() => {
+    if (user === "loading" || onboardingResolved === null) return;
+
+    let cancelled = false;
+
+    const route = async () => {
+      try {
+        const onboardingDone = onboardingResolved;
         const onEntryPath =
           pathname === "/" ||
           pathname === "/index" ||
           pathname === "/onboarding" ||
           pathname === "/auth";
 
-        // 1. Önce onboarding kontrolü
         if (!onboardingDone) {
           if (pathname !== "/onboarding") router.replace("/onboarding");
           return;
         }
 
-        // 2. Onboarding tamam ama giriş yok → auth'a gönder
         if (!user) {
           if (pathname !== "/auth") router.replace("/auth" as Href);
           return;
         }
 
-        // 3. Her şey tamam → ana sayfaya
-        if (onEntryPath) {
+        const userDoc = await getUserProfile(user.uid);
+        if (cancelled) return;
+
+        const needsHealthProfile = isHealthProfileIncomplete(userDoc?.healthProfile);
+
+        if (needsHealthProfile) {
+          if (!isHealthProfilePath(pathname)) {
+            router.replace("/health-profile?required=1" as Href);
+          }
+          return;
+        }
+
+        if (onEntryPath || pathname === "/auth") {
           router.replace("/(tabs)" as Href);
         }
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.warn("[RootLayout] yönlendirme hatası:", e);
       }
     };
 
-    void bootstrap();
-    return () => { cancelled = true; };
-  }, [user, pathname, router]);
+    void route();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, onboardingResolved, pathname, router]);
+
+  const gateLoading = user === "loading" || onboardingResolved === null;
 
   return (
     <>
       <StatusBar style="dark" />
-      <Stack initialRouteName="onboarding" screenOptions={{ headerShown: false }}>
+      {gateLoading ? (
+        <View style={styles.gate}>
+          <ActivityIndicator size="large" color="#16a34a" />
+        </View>
+      ) : null}
+      <Stack initialRouteName="index" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="onboarding" options={{ presentation: "card", animation: "fade_from_bottom" }} />
         <Stack.Screen name="index" />
         <Stack.Screen name="auth" options={{ presentation: "card", animation: "slide_from_right" }} />
@@ -109,6 +152,10 @@ export default function RootLayout() {
         <Stack.Screen name="help" options={{ presentation: "card", animation: "slide_from_right" }} />
         <Stack.Screen name="recipe" options={{ presentation: "card", animation: "slide_from_right" }} />
         <Stack.Screen name="blog-post" options={{ presentation: "card", animation: "slide_from_right" }} />
+        <Stack.Screen
+          name="story/new"
+          options={{ presentation: "card", animation: "slide_from_right", headerShown: false }}
+        />
         <Stack.Screen
           name="user-profile/[uid]"
           options={{
@@ -145,3 +192,13 @@ export default function RootLayout() {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  gate: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    zIndex: 10,
+  },
+});

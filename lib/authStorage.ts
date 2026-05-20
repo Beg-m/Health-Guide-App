@@ -7,20 +7,28 @@ import {
   } from "firebase/auth";
   import { doc, setDoc, getDoc } from "firebase/firestore";
   import { auth, db } from "./firebase";
+  import {
+    getActiveHealthProfileLabels,
+    loadHealthProfile,
+    persistHealthProfile,
+    type HealthProfilePreferences,
+  } from "./healthProfileStorage";
   
   // Kayıt ol
   export async function registerUser(email: string, password: string, displayName: string) {
     const credential = await createUserWithEmailAndPassword(auth, email, password);
     const user = credential.user;
-  
+    const healthProfile = await loadHealthProfile();
+
     // Firestore'a kullanıcı profili kaydet
     await setDoc(doc(db, "users", user.uid), {
       uid: user.uid,
       email,
       displayName,
       createdAt: new Date().toISOString(),
-      conditions: [],       // onboarding'den gelecek
-      healthProfile: {},    // onboarding'den gelecek
+      onboardingCompleted: true,
+      conditions: getActiveHealthProfileLabels(healthProfile),
+      healthProfile,
     });
   
     return user;
@@ -41,6 +49,13 @@ import {
   export async function getUserProfile(uid: string) {
     const snap = await getDoc(doc(db, "users", uid));
     return snap.exists() ? snap.data() : null;
+  }
+
+  export async function saveUserHealthProfile(
+    uid: string,
+    healthProfile: HealthProfilePreferences
+  ) {
+    await persistHealthProfile(healthProfile, uid);
   }
   
   // Auth state dinle

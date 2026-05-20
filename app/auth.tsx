@@ -11,40 +11,31 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, ScreenPadding, Shadows } from "@/constants/theme";
-import { STORAGE_USER_CONDITIONS } from "@/constants/onboardingStorage";
 import { loginUser, registerUser } from "@/lib/authStorage";
-import { auth, db } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
+import {
+  loadHealthProfile,
+  persistHealthProfile,
+} from "@/lib/healthProfileStorage";
+import { markOnboardingCompleted } from "@/lib/onboardingStatus";
 import { sendPasswordResetEmail, signInAnonymously } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
 
 export default function AuthScreen() {
-  const router = useRouter();
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const syncConditionsToFirestore = async (uid: string) => {
+  const syncProfileToFirestore = async (uid: string) => {
     try {
-      const saved = await AsyncStorage.getItem(STORAGE_USER_CONDITIONS);
-      const conditions = saved ? JSON.parse(saved) : [];
-      await setDoc(
-        doc(db, "users", uid),
-        {
-          uid,
-          conditions,
-          onboardingCompleted: true,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
+      const healthProfile = await loadHealthProfile();
+      await persistHealthProfile(healthProfile, uid);
+      await markOnboardingCompleted(uid);
     } catch (e) {
-      console.warn("Firestore conditions sync hatası:", e);
+      console.warn("Firestore profil sync hatası:", e);
     }
   };
 
@@ -62,14 +53,10 @@ export default function AuthScreen() {
     try {
       if (isRegister) {
         await registerUser(email.trim(), password, displayName.trim());
-        // Yeni kayıt olunca onboarding'i sıfırla
-        await AsyncStorage.removeItem("onboardingCompleted");
-        await AsyncStorage.removeItem("userConditions");
       } else {
         await loginUser(email.trim(), password);
       }
-      await syncConditionsToFirestore(auth.currentUser!.uid);
-      router.replace("/(tabs)");
+      await syncProfileToFirestore(auth.currentUser!.uid);
     } catch (err: any) {
       const msg = firebaseErrorMessage(err.code);
       Alert.alert("Hata", msg);
@@ -101,8 +88,7 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       await signInAnonymously(auth);
-      await syncConditionsToFirestore(auth.currentUser!.uid);
-      router.replace("/(tabs)");
+      await syncProfileToFirestore(auth.currentUser!.uid);
     } catch {
       Alert.alert("Hata", "Misafir girişi başarısız.");
     } finally {

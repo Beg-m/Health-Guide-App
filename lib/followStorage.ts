@@ -1,4 +1,4 @@
-import { doc, setDoc, deleteDoc, getDoc, collection, getDocs } from "firebase/firestore";
+import { doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 // Takip et
@@ -35,4 +35,30 @@ export async function getFollowersCount(uid: string): Promise<number> {
 export async function getFollowingCount(uid: string): Promise<number> {
   const snap = await getDocs(collection(db, "users", uid, "following"));
   return snap.size;
+}
+
+/** Takipçi sayısını gerçek zamanlı dinler */
+export function subscribeFollowersCount(
+  uid: string,
+  onCount: (count: number) => void,
+  onError?: (error: Error) => void
+): () => void {
+  return onSnapshot(
+    collection(db, "users", uid, "followers"),
+    (snap) => onCount(snap.size),
+    (err) => onError?.(err instanceof Error ? err : new Error(String(err)))
+  );
+}
+
+/** Takip edilen sayısını gerçek zamanlı dinler */
+export function subscribeFollowingCount(
+  uid: string,
+  onCount: (count: number) => void,
+  onError?: (error: Error) => void
+): () => void {
+  return onSnapshot(
+    collection(db, "users", uid, "following"),
+    (snap) => onCount(snap.size),
+    (err) => onError?.(err instanceof Error ? err : new Error(String(err)))
+  );
 }

@@ -12,16 +12,21 @@ import {
   Animated,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, type Href } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Haptics from "expo-haptics";
 import { ScreenPadding } from "@/constants/theme";
 import {
-  CONDITION_OPTIONS,
-  STORAGE_USER_CONDITIONS,
-} from "@/constants/onboardingStorage";
+  applyHealthPreferenceChange,
+  DEFAULT_HEALTH_PROFILE,
+  HEALTH_PROFILE_OPTIONS,
+  loadHealthProfile,
+  persistHealthProfile,
+  type HealthProfilePreferences,
+} from "@/lib/healthProfileStorage";
+import { auth } from "@/lib/firebase";
+import { markOnboardingCompleted } from "@/lib/onboardingStatus";
 
 const ACCENT_GREEN = "#16a34a";
 
@@ -77,8 +82,14 @@ export default function OnboardingScreen() {
   const listRef = useRef<ScrollView>(null);
   const floatY = useRef(new Animated.Value(0)).current;
   const [index, setIndex] = useState(0);
-  const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
+  const [healthPrefs, setHealthPrefs] = useState<HealthProfilePreferences>(
+    DEFAULT_HEALTH_PROFILE
+  );
   const [scrollViewportH, setScrollViewportH] = useState(0);
+
+  useEffect(() => {
+    void loadHealthProfile().then(setHealthPrefs);
+  }, []);
 
   const slideHeight =
     scrollViewportH > 0
@@ -109,26 +120,27 @@ export default function OnboardingScreen() {
     outputRange: [0, -10],
   });
 
-  const persistConditions = useCallback(async (next: string[]) => {
-    await AsyncStorage.setItem(STORAGE_USER_CONDITIONS, JSON.stringify(next));
-  }, []);
+  const persistHealthProfileSelection = useCallback(
+    async (next: HealthProfilePreferences) => {
+      await persistHealthProfile(next, auth.currentUser?.uid ?? null);
+    },
+    []
+  );
 
-  const toggleCondition = (label: string) => {
+  const togglePreference = (key: keyof HealthProfilePreferences) => {
     if (Platform.OS !== "web") {
       Haptics.selectionAsync();
     }
-    setSelectedConditions((prev) => {
-      const next = prev.includes(label)
-        ? prev.filter((x) => x !== label)
-        : [...prev, label];
-      void persistConditions(next);
+    setHealthPrefs((prev) => {
+      const next = applyHealthPreferenceChange(prev, key, !prev[key]);
+      void persistHealthProfileSelection(next);
       return next;
     });
   };
 
   const completeOnboarding = async () => {
-    await AsyncStorage.setItem("onboardingCompleted", "true");
-    await persistConditions(selectedConditions);
+    await persistHealthProfile(healthPrefs, auth.currentUser?.uid ?? null);
+    await markOnboardingCompleted(auth.currentUser?.uid ?? null);
     router.replace("/auth" as Href);
   };
 
@@ -227,19 +239,19 @@ export default function OnboardingScreen() {
                 <Text style={styles.chipHint}>Seçimlerinize göre içerikler filtrelenecek</Text>
                 <Text style={styles.chipsHeading}>İlgilendiğiniz konular</Text>
                 <View style={styles.chipWrap}>
-                  {CONDITION_OPTIONS.map((label) => {
-                    const on = selectedConditions.includes(label);
+                  {HEALTH_PROFILE_OPTIONS.map((item) => {
+                    const on = healthPrefs[item.key];
                     return (
                       <Pressable
-                        key={label}
-                        onPress={() => toggleCondition(label)}
+                        key={item.key}
+                        onPress={() => togglePreference(item.key)}
                         style={[styles.chip, on ? styles.chipOn : styles.chipOff]}
                       >
                         <Text
                           style={[styles.chipText, on ? styles.chipTextOn : styles.chipTextOff]}
                         >
                           {on ? "✓ " : ""}
-                          {label}
+                          {item.label}
                         </Text>
                       </Pressable>
                     );

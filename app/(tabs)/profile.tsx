@@ -23,12 +23,14 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { Colors, ScreenPadding } from "@/constants/theme";
+import { fetchFavoriteRecipeIdsFromFirestore, subscribeRecipes } from "@/lib/firestore";
+import { subscribeFollowersCount, subscribeFollowingCount } from "@/lib/followStorage";
 import {
-  fetchFavoriteRecipeIdsFromFirestore,
-  subscribeRecipes,
-} from "@/lib/firestore";
-import { readFavoriteIdsFromStorage } from "@/lib/favoriteRecipes";
-import { getFollowersCount, getFollowingCount } from "@/lib/followStorage";
+  getActiveHealthProfileLabels,
+  loadHealthProfileForUser,
+  parseHealthProfile,
+  saveHealthProfile,
+} from "@/lib/healthProfileStorage";
 import type { RecipePost } from "@/constants/recipesBlog";
 import { displayImageUri } from "@/lib/displayImageUri";
 
@@ -63,7 +65,26 @@ export default function ProfileScreen() {
   // Firestore realtime dinle
   useEffect(() => {
     let unsubscribeSnapshot: (() => void) | null = null;
+    let unsubscribeFollowers: (() => void) | null = null;
+    let unsubscribeFollowing: (() => void) | null = null;
+
+    const refreshHealthBadges = async (uid: string, healthProfileRaw: unknown) => {
+      const parsed = parseHealthProfile(healthProfileRaw);
+      const profile = parsed ?? (await loadHealthProfileForUser(uid));
+      if (parsed) {
+        void saveHealthProfile(parsed);
+      }
+      setConditions(getActiveHealthProfileLabels(profile));
+    };
+
     const unsubscribeAuth = auth.onAuthStateChanged((firebaseUser) => {
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+      if (unsubscribeFollowers) unsubscribeFollowers();
+      if (unsubscribeFollowing) unsubscribeFollowing();
+      unsubscribeSnapshot = null;
+      unsubscribeFollowers = null;
+      unsubscribeFollowing = null;
+
       if (!firebaseUser) {
         setUser(null);
         setFirestoreDisplayName("");
@@ -71,34 +92,40 @@ export default function ProfileScreen() {
         setConditions([]);
         setFollowersCount(0);
         setFollowingCount(0);
-        if (unsubscribeSnapshot) unsubscribeSnapshot();
         return;
       }
+
+      const uid = firebaseUser.uid;
       setUser(firebaseUser);
+
+      unsubscribeFollowers = subscribeFollowersCount(uid, setFollowersCount, (e) =>
+        console.warn("Takipçi sayısı dinleme hatası:", e)
+      );
+      unsubscribeFollowing = subscribeFollowingCount(uid, setFollowingCount, (e) =>
+        console.warn("Takip sayısı dinleme hatası:", e)
+      );
+
       unsubscribeSnapshot = onSnapshot(
-        doc(db, "users", firebaseUser.uid),
+        doc(db, "users", uid),
         (snap) => {
-          if (snap.exists()) {
-            const data = snap.data();
-            setFirestoreDisplayName(data.displayName ?? "");
-            setPhotoURL(data.photoURL ?? null);
-            setConditions(data.conditions ?? []);
-            void (async () => {
-              const [followers, following] = await Promise.all([
-                getFollowersCount(firebaseUser.uid),
-                getFollowingCount(firebaseUser.uid),
-              ]);
-              setFollowersCount(followers);
-              setFollowingCount(following);
-            })();
+          if (!snap.exists()) {
+            void refreshHealthBadges(uid, null);
+            return;
           }
+          const data = snap.data();
+          setFirestoreDisplayName(data.displayName ?? "");
+          setPhotoURL(data.photoURL ?? null);
+          void refreshHealthBadges(uid, data.healthProfile);
         },
         (e) => console.warn("Profil snapshot hatası:", e)
       );
     });
+
     return () => {
       unsubscribeAuth();
       if (unsubscribeSnapshot) unsubscribeSnapshot();
+      if (unsubscribeFollowers) unsubscribeFollowers();
+      if (unsubscribeFollowing) unsubscribeFollowing();
     };
   }, []);
 
@@ -115,7 +142,7 @@ export default function ProfileScreen() {
     return () => unsub();
   }, []);
 
-  // Favorileri yükle
+  // Favorileri ve sağlık profili badge'lerini odaklanınca yenile
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -123,15 +150,14 @@ export default function ProfileScreen() {
         const firebaseUser = auth.currentUser;
         if (!firebaseUser) return;
         try {
-          // Firebase Auth UID kullan, local ID değil
           const uid = firebaseUser.uid;
-          const [fromStorage, fromFirestore] = await Promise.all([
-            readFavoriteIdsFromStorage(),
+          const [fromFirestore, profile] = await Promise.all([
             fetchFavoriteRecipeIdsFromFirestore(uid).catch(() => [] as string[]),
+            loadHealthProfileForUser(uid),
           ]);
-          // Sadece Firestore'daki favorileri kullan (kullanıcıya özel)
           if (!cancelled) {
             setFavoriteIds(fromFirestore);
+            setConditions(getActiveHealthProfileLabels(profile));
           }
         } catch {
           if (!cancelled) setFavoriteIds([]);
@@ -317,17 +343,11 @@ export default function ProfileScreen() {
           <Text style={styles.name}>{displayName}</Text>
           <Text style={styles.email}>{email}</Text>
           <View style={styles.conditionsWrap}>
-            {conditions.length > 0 ? (
-              conditions.map((c) => (
-                <View key={c} style={styles.conditionChip}>
-                  <Text style={styles.conditionChipText}>{c}</Text>
-                </View>
-              ))
-            ) : (
-              <View style={styles.conditionChip}>
-                <Text style={styles.conditionChipText}>🙂 Genel Kullanıcı</Text>
+            {conditions.map((c) => (
+              <View key={c} style={styles.conditionChip}>
+                <Text style={styles.conditionChipText}>{c}</Text>
               </View>
-            )}
+            ))}
           </View>
         </View>
 

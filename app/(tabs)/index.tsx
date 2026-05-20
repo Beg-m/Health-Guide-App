@@ -9,13 +9,11 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { Ionicons } from "@expo/vector-icons";
-import { STORAGE_USER_CONDITIONS } from "@/constants/onboardingStorage";
 import {
   Colors,
   Gradients,
@@ -97,30 +95,10 @@ export default function HomeScreen() {
 
   const quickCardWidth = useQuickCardWidth();
   const { prefs, reload } = useHealthProfile();
-  const [userConditions, setUserConditions] = useState<string[]>([]);
-
-  const loadUserConditions = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem(STORAGE_USER_CONDITIONS);
-      if (!raw) {
-        setUserConditions([]);
-        return;
-      }
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
-        setUserConditions(parsed);
-      } else {
-        setUserConditions([]);
-      }
-    } catch {
-      setUserConditions([]);
-    }
-  }, []);
 
   useFocusEffect(
     useCallback(() => {
       void reload();
-      void loadUserConditions();
 
       const user = auth.currentUser;
       if (user) {
@@ -134,12 +112,12 @@ export default function HomeScreen() {
           })
           .catch(() => {});
       }
-    }, [reload, loadUserConditions])
+    }, [reload])
   );
 
   const activeFilterKeys = getActiveFilterKeys(prefs);
-  const showColyakSection = userConditions.includes("Çölyak");
-  const showDiabetesSection = userConditions.includes("Diyabet");
+  const showColyakSection = prefs.celiac;
+  const showDiabetesSection = prefs.diabetes;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>

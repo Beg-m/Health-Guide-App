@@ -1,16 +1,6 @@
-/** AsyncStorage keys + helpers for onboarding & condition chips */
+/** AsyncStorage keys for onboarding flow */
 
 export const STORAGE_ONBOARDING_COMPLETED = "onboardingCompleted";
+
+/** @deprecated Sağlık profili artık `@health_guide_health_profile` (healthProfileStorage) içinde tutulur */
 export const STORAGE_USER_CONDITIONS = "userConditions";
-
-/** Labels must match onboarding chips exactly (used for home personalization). */
-export const CONDITION_OPTIONS = [
-  "Çölyak",
-  "Diyabet",
-  "Vegan",
-  "Vejetaryen",
-  "Hipertansiyon",
-  "Kalp Hastası",
-] as const;
-
-export type UserCondition = (typeof CONDITION_OPTIONS)[number];
