@@ -19,7 +19,7 @@ import {
   loadHealthProfile,
   persistHealthProfile,
 } from "@/lib/healthProfileStorage";
-import { markOnboardingCompleted } from "@/lib/onboardingStatus";
+import { syncOnboardingAfterAuth } from "@/lib/onboardingStatus";
 import { sendPasswordResetEmail, signInAnonymously } from "firebase/auth";
 
 export default function AuthScreen() {
@@ -33,7 +33,7 @@ export default function AuthScreen() {
     try {
       const healthProfile = await loadHealthProfile();
       await persistHealthProfile(healthProfile, uid);
-      await markOnboardingCompleted(uid);
+      await syncOnboardingAfterAuth(uid);
     } catch (e) {
       console.warn("Firestore profil sync hatası:", e);
     }

@@ -26,7 +26,7 @@ import {
       email,
       displayName,
       createdAt: new Date().toISOString(),
-      onboardingCompleted: true,
+      onboardingCompleted: false,
       conditions: getActiveHealthProfileLabels(healthProfile),
       healthProfile,
     });

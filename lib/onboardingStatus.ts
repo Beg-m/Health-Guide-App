@@ -27,6 +27,33 @@ export async function markOnboardingCompleted(uid?: string | null): Promise<void
  * - Girişliyse Firestore; true ise yerel depoyu senkronlar
  * - Firestore okunamazsa yerel "true" korunur; yerel false ise false (yanlışlıkla onboarding'e atmamak için true varsaymayız)
  */
+export async function isOnboardingCompletedLocally(): Promise<boolean> {
+  const localRaw = await AsyncStorage.getItem(STORAGE_ONBOARDING_COMPLETED);
+  return localRaw === "true";
+}
+
+/** Giriş/kayıt sonrası: yerel tamamlanmadıysa Firestore'da false tutulur */
+export async function syncOnboardingAfterAuth(uid: string): Promise<void> {
+  const localDone = await isOnboardingCompletedLocally();
+  if (localDone) {
+    await markOnboardingCompleted(uid);
+    return;
+  }
+  await AsyncStorage.removeItem(STORAGE_ONBOARDING_COMPLETED);
+  try {
+    await setDoc(
+      doc(db, "users", uid),
+      {
+        onboardingCompleted: false,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("[onboardingStatus] Firestore onboarding false yazılamadı:", e);
+  }
+}
+
 export async function resolveOnboardingCompleted(
   uid?: string | null
 ): Promise<boolean> {

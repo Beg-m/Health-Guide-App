@@ -141,7 +141,11 @@ export default function OnboardingScreen() {
   const completeOnboarding = async () => {
     await persistHealthProfile(healthPrefs, auth.currentUser?.uid ?? null);
     await markOnboardingCompleted(auth.currentUser?.uid ?? null);
-    router.replace("/auth" as Href);
+    if (auth.currentUser) {
+      router.replace("/health-profile?required=1" as Href);
+    } else {
+      router.replace("/auth" as Href);
+    }
   };
 
   const onSkip = () => {
